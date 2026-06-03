@@ -1,0 +1,9 @@
+# Operator-scoped runtime state never belongs in the marketplace repo.
+# anvil keeps its state out-of-repo (~/.anvil, $BEADS_DIR) by design.
+.anvil/
+.beads/
+*.log
+
+# OS / editor noise
+.DS_Store
+*.swp

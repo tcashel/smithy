@@ -1,0 +1,14 @@
+{
+  "name": "smithy",
+  "description": "Personal Claude Code plugin marketplace. Ships anvil — a non-invasive, operator-scoped plan→critique→adjudicate→dispatch→review→fix pipeline over beads.",
+  "owner": {
+    "name": "Tripp Cashel"
+  },
+  "plugins": [
+    {
+      "name": "anvil",
+      "source": "./plugins/anvil",
+      "description": "Operator-scoped, non-invasive agent pipeline: plan → critique → adjudicate → dispatch → review → fix. Reassembles Forge's loop from bare Claude Code skills + Workflows + beads, with zero repo imposition."
+    }
+  ]
+}
