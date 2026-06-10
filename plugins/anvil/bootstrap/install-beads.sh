@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # install-beads.sh — stand up an OPERATOR-SCOPED, non-invasive beads store.
 #
 # The whole point of anvil is zero repo imposition: no committed `.beads/` file

@@ -39,6 +39,23 @@ Prerequisites: `bd` ([beads](https://github.com/gastownhall/beads)) or `br`
 the full walkthrough and [`plugins/anvil/LEARNINGS.md`](plugins/anvil/LEARNINGS.md)
 for the portable engineering lessons this plugin encodes.
 
+### Usage
+
+anvil is five slash commands. Run setup once, then walk an idea through the loop:
+
+```
+/anvil:setup        # one-time: install beads operator-scoped, prove zero repo imposition
+/anvil:plan         # turn an idea (or a plan-mode plan) into a locked spec + beads issue
+/anvil:critique     # two independent critics + a synthesizer harden the spec
+/anvil:adjudicate   # you resolve the cruxes; decisions fold back into the spec, then it locks
+/anvil:dispatch     # headless build → quality gate → DRAFT PR → review → one auto-fix → stop
+```
+
+The loop stops at a **draft PR** — you adjudicate the merge; anvil never auto-merges.
+All state stays out-of-repo (`$BEADS_DIR`, `~/.anvil/specs/`); your target repo is
+never touched. Each command works standalone, so you can also jump straight to
+`/anvil:dispatch` against an existing `bd ready` frontier.
+
 ---
 
 ## Why this exists (the experiment)
@@ -69,4 +86,4 @@ the point is to find it honestly.
 
 ## License
 
-[MIT](LICENSE) © 2026 Tripp Cashel
+[Apache 2.0](LICENSE) © 2026 Tripp Cashel — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
