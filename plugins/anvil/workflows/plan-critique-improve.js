@@ -280,17 +280,23 @@ const CRITIC_ANGLES = [
   phase("critique");
   log("Running two independent critics in parallel (differing angles/models)…");
 
-  const critiques = await parallel(
-    CRITIC_ANGLES.map((ac) => () =>
-      agent(buildCriticPrompt(spec, ac), {
-        agentType: "anvil-critic",
-        model: ac.model,
-        schema: CRITIQUE_SCHEMA,
-        phase: "critique",
-        label: `critic-${ac.label}`,
-      }),
-    ),
-  );
+  // Prefer the anvil-critic plugin subagent; fall back to the default workflow
+  // subagent when the type isn't registered (running from the plugin-source
+  // repo, or a fresh install before the session restart). The critic prompt
+  // carries the severity rubric, read-only rules, and output contract inline,
+  // so the fallback loses polish, not the contract.
+  const runCritic = async (ac) => {
+    const prompt = buildCriticPrompt(spec, ac);
+    const opts = { model: ac.model, schema: CRITIQUE_SCHEMA, phase: "critique", label: `critic-${ac.label}` };
+    try {
+      return await agent(prompt, { ...opts, agentType: "anvil-critic" });
+    } catch (e) {
+      log(`critic-${ac.label}: anvil-critic agent type unavailable — falling back to the default subagent (install the anvil plugin and restart the session to use the dedicated critic).`);
+      return agent(prompt, opts);
+    }
+  };
+
+  const critiques = await parallel(CRITIC_ANGLES.map((ac) => () => runCritic(ac)));
 
   // parallel() resolves a failed/skipped agent to null — degrade, don't throw.
   const [critiqueA, critiqueB] = critiques;

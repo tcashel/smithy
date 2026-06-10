@@ -126,6 +126,120 @@ fi
 echo "IMPLEMENT_FAIL pipe_exit=$PIPE_EXIT result_ok=$RESULT_OK commits=$COMMITS_AHEAD"
 exit 1`;
 
+// ── Structured-return schemas ─────────────────────────────────────────────────
+// DECLARED BEFORE the workflow body on purpose: the body executes at top level,
+// and a `const` declared after it is still in the temporal dead zone when the
+// body's stage callbacks run. Function declarations hoist; consts do NOT.
+
+const resolveSchema = {
+  type: "object",
+  required: ["ready"],
+  properties: {
+    ready: { type: "boolean" },
+    repoRoot: { type: "string" },
+    repoName: { type: "string" },
+    worktree: { type: "string" },
+    branch: { type: "string" },
+    defaultBranch: { type: "string" },
+    baseRef: { type: "string" },
+    specPath: { type: "string" },
+    title: { type: "string" },
+    qualityCommands: { type: "array", items: { type: "string" } },
+    note: { type: "string" },
+  },
+};
+
+const implementSchema = {
+  type: "object",
+  required: ["implemented"],
+  properties: {
+    implemented: { type: "boolean" },
+    commitsAhead: { type: "integer" },
+    stopReason: { type: "string" },
+    note: { type: "string" },
+  },
+};
+
+const qualitySchema = {
+  type: "object",
+  required: ["qualityPassed"],
+  properties: {
+    qualityPassed: { type: "boolean" },
+    failedCommands: { type: "array", items: { type: "string" } },
+  },
+};
+
+const prSchema = {
+  type: "object",
+  required: ["prNumber"],
+  properties: {
+    prNumber: { type: ["integer", "null"] },
+    prUrl: { type: ["string", "null"] },
+    reused: { type: "boolean" },
+    note: { type: "string" },
+  },
+};
+
+const reviewSchema = {
+  type: "object",
+  required: ["verdict"],
+  properties: {
+    verdict: { type: "string", enum: ["approve", "request-changes", "block"] },
+    summary: { type: "string" },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["severity"],
+        properties: {
+          severity: { type: "string", enum: ["BLOCKER", "HIGH", "MEDIUM", "LOW"] },
+          file: { type: "string" },
+          line: { type: ["integer", "null"] },
+          message: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+const fixSchema = {
+  type: "object",
+  required: ["applied"],
+  properties: {
+    applied: { type: "boolean" },
+    summary: { type: "string" },
+  },
+};
+
+// Condensed anvil-reviewer rubric, used ONLY when the anvil-reviewer agent type
+// isn't registered (running from the plugin-source repo, or a fresh plugin
+// install before the session restart). The full rubric lives in
+// agents/reviewer.md; this fallback preserves the contract, not the polish.
+const REVIEWER_RUBRIC = `You are the anvil PR reviewer (fallback mode — the anvil-reviewer
+agent type is not registered in this session).
+
+READ-ONLY: you may not edit files, commit, label, change PR state, or merge. Your ONLY
+permitted write is publishing PR comments via gh when the instructions below say to.
+
+Severity — every finding gets exactly one label (when between two, pick the higher):
+- BLOCKER: spec acceptance criterion not met or behavioral contract broken; data loss;
+  security vulnerability; crash on normal input; backward-compat break; CI failing
+  because of this PR.
+- HIGH: correctness issue outside the spec; missing input validation; race; resource
+  leak; silently swallowed error; test gap on a critical non-trivial path.
+- MEDIUM: code smell, misleading naming, missing edge-case test, doc drift. Doesn't block.
+- LOW: style nits, typos. Never load-bearing on the verdict.
+
+Verdict (decide AFTER classifying all findings):
+- any BLOCKERs spread across the diff -> block
+- localized BLOCKERs or any HIGH or unmet spec criteria -> request-changes
+- otherwise, all spec criteria met and you read every changed file -> approve
+
+Output exactly ONE fenced block tagged anvil-review containing: ## Verdict, ## Summary
+(2-4 sentences), ## Findings (severity-ordered, each with Where: file:line, Evidence,
+Why, Fix), ## Spec Adherence (walk each acceptance criterion: Met/Partial/Missing/NA
+with citations), ## What I Verified, ## What I Skipped. Emit nothing after the block.`;
+
 // Runs at top level: agent/pipeline/log/args are runtime globals.
 // `stage` keeps the readable per-stage title labels; the REAL progress grouping
 // is done by the per-agent `phase:` opts passed inside each stage.
@@ -151,6 +265,7 @@ const stage = (title, fn) => fn;
         phase: "resolve",
         label: `resolve:${item.id}`,
       });
+      if (!r) return { ...item, ready: false, status: "skipped", note: "resolve agent failed" };
       return { ...item, ...r };
     }),
 
@@ -164,6 +279,7 @@ const stage = (title, fn) => fn;
         phase: "implement",
         label: `implement:${item.id}`,
       });
+      if (!r) return { ...item, implemented: false, note: "implement agent failed" };
       return { ...item, ...r };
     }),
 
@@ -179,6 +295,7 @@ const stage = (title, fn) => fn;
       });
       // Quality failure does NOT abort the atom: Forge still opens the draft PR
       // so CI and the human can see the failure. We carry the result forward.
+      if (!r) return { ...item, qualityPassed: false, failedCommands: ["(quality agent failed)"] };
       return { ...item, ...r };
     }),
 
@@ -192,18 +309,14 @@ const stage = (title, fn) => fn;
         phase: "pr",
         label: `pr:${item.id}`,
       });
+      if (!r) return { ...item, prNumber: null, note: "pr agent failed" };
       return { ...item, ...r };
     }),
 
     // ── Stage 5: review the draft PR (anvil-reviewer subagent) ───────────────
     stage("review", async (item) => {
       if (!item.prNumber) return item;
-      const review = await agent(reviewPrompt(item), {
-        schema: reviewSchema,
-        agentType: "anvil-reviewer",
-        phase: "review",
-        label: `review:${item.id}`,
-      });
+      const review = await runReview(item, `review:${item.id}`);
       return { ...item, review };
     }),
 
@@ -227,17 +340,12 @@ const stage = (title, fn) => fn;
           label: `fix:${item.id}:r${round + 1}`,
         });
         cur = { ...cur, lastFix: fixed };
-        if (fixed.applied === false) break; // nothing to fix / fixer gave up
+        if (!fixed || fixed.applied === false) break; // nothing to fix / fixer gave up
 
         // Re-review once so the draft PR carries an up-to-date verdict for the
         // human. We do NOT branch on it — no second fix round, ever.
-        const reReview = await agent(reviewPrompt(cur), {
-          schema: reviewSchema,
-          agentType: "anvil-reviewer",
-          phase: "review",
-          label: `re-review:${item.id}:r${round + 1}`,
-        });
-        cur = { ...cur, review: reReview };
+        const reReview = await runReview(cur, `re-review:${item.id}:r${round + 1}`);
+        cur = { ...cur, review: reReview ?? cur.review };
       }
       return finalize({ ...cur, fixRounds: AUTO_FIX_ROUNDS });
     }),
@@ -245,10 +353,22 @@ const stage = (title, fn) => fn;
 
   // Summary only — the durable record lives in bd (issue status) and GitHub
   // (the labeled draft PR), NOT here. See the run-state caveat at the top.
-  for (const a of atoms) {
+  for (const a of (atoms || []).filter(Boolean)) {
     log(`  ${a.id}: status=${a.status ?? "unknown"} pr=${a.prUrl ?? "—"} verdict=${a.review?.verdict ?? "—"}`);
   }
   return { atoms };
+}
+
+// ── Review helper: prefer the anvil-reviewer subagent, degrade gracefully ─────
+// (function declaration — hoists above the body)
+async function runReview(item, label) {
+  const opts = { schema: reviewSchema, phase: "review", label };
+  try {
+    return await agent(reviewPrompt(item), { ...opts, agentType: "anvil-reviewer" });
+  } catch (e) {
+    log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and restart the session to use the dedicated reviewer).`);
+    return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
+  }
 }
 
 // ── Stage 1: resolve ──────────────────────────────────────────────────────────
@@ -284,28 +404,12 @@ CLAUDE.md, settings, or commit any .beads file into it.
    If "$WT" already exists from a prior run, reuse it (idempotent re-run).
 5. Compute baseRef: prefer "origin/<defaultBranch>" if it resolves
    (\`git -C "$WT" rev-parse --verify origin/<defaultBranch>\`), else <defaultBranch>.
+6. qualityCommands: the exact commands listed in the spec's "Quality Gates"
+   section, one array entry per line, verbatim.
 
 Report the resolved values. Set ready=false with a note if the spec file is
 missing, empty, or the repo path can't be resolved.`;
 }
-
-const resolveSchema = {
-  type: "object",
-  required: ["ready"],
-  properties: {
-    ready: { type: "boolean" },
-    repoRoot: { type: "string" },
-    repoName: { type: "string" },
-    worktree: { type: "string" },
-    branch: { type: "string" },
-    defaultBranch: { type: "string" },
-    baseRef: { type: "string" },
-    specPath: { type: "string" },
-    title: { type: "string" },
-    qualityCommands: { type: "array", items: { type: "string" } },
-    note: { type: "string" },
-  },
-};
 
 // ── Stage 2: implement (headless, result-event-trusted) ───────────────────────
 function implementPrompt(item) {
@@ -350,17 +454,6 @@ ${recipe}
    commitsAhead from the recipe output.`;
 }
 
-const implementSchema = {
-  type: "object",
-  required: ["implemented"],
-  properties: {
-    implemented: { type: "boolean" },
-    commitsAhead: { type: "integer" },
-    stopReason: { type: "string" },
-    note: { type: "string" },
-  },
-};
-
 // ── Stage 3: quality gate ─────────────────────────────────────────────────────
 function qualityPrompt(item) {
   const cmds = item.qualityCommands && item.qualityCommands.length
@@ -377,15 +470,6 @@ NOT abort the atom — Forge still opens the draft PR so CI and the human see th
 failure. Report qualityPassed=false if any command failed, with the list of
 failed commands. Never invoke the \`forge\` binary.`;
 }
-
-const qualitySchema = {
-  type: "object",
-  required: ["qualityPassed"],
-  properties: {
-    qualityPassed: { type: "boolean" },
-    failedCommands: { type: "array", items: { type: "string" } },
-  },
-};
 
 // ── Stage 4: open the DRAFT PR ────────────────────────────────────────────────
 function prPrompt(item) {
@@ -409,17 +493,6 @@ Never invoke the \`forge\` binary.
      gh pr edit <number> --add-label anvil${item.qualityPassed === false ? " --add-label quality-failed" : ""}
 5. Report the PR number and url.`;
 }
-
-const prSchema = {
-  type: "object",
-  required: ["prNumber"],
-  properties: {
-    prNumber: { type: ["integer", "null"] },
-    prUrl: { type: ["string", "null"] },
-    reused: { type: "boolean" },
-    note: { type: "string" },
-  },
-};
 
 // ── Stage 5/6: review (anvil-reviewer subagent) ───────────────────────────────
 // The reviewer emits exactly one ```anvil-review fenced block; the subagent's
@@ -446,28 +519,6 @@ any finding whose marker already appears on the PR, so re-running never
 duplicates a comment.`;
 }
 
-const reviewSchema = {
-  type: "object",
-  required: ["verdict"],
-  properties: {
-    verdict: { type: "string", enum: ["approve", "request-changes", "block"] },
-    summary: { type: "string" },
-    findings: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["severity"],
-        properties: {
-          severity: { type: "string", enum: ["BLOCKER", "HIGH", "MEDIUM", "LOW"] },
-          file: { type: "string" },
-          line: { type: ["integer", "null"] },
-          message: { type: "string" },
-        },
-      },
-    },
-  },
-};
-
 function fixPrompt(item, round) {
   return `You are the anvil auto-fix step (round ${round} of ${AUTO_FIX_ROUNDS}) for
 draft PR #${item.prNumber}, bd issue ${item.id}. Use Bash. Working dir: ${item.worktree}
@@ -487,15 +538,6 @@ ${(item.review?.findings || [])
 3. Do NOT mark the PR ready, do NOT merge — the atom STOPS after this round and
    the human adjudicates. Report what you changed.`;
 }
-
-const fixSchema = {
-  type: "object",
-  required: ["applied"],
-  properties: {
-    applied: { type: "boolean" },
-    summary: { type: "string" },
-  },
-};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function parseIds(args) {
