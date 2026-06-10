@@ -360,15 +360,18 @@ const stage = (title, fn) => fn;
 }
 
 // ── Review helper: prefer the anvil-reviewer subagent, degrade gracefully ─────
-// (function declaration — hoists above the body)
+// Installed plugin agents register NAMESPACED ("anvil:anvil-reviewer"); the
+// bare name covers any unprefixed registration. (function declaration — hoists
+// above the body)
 async function runReview(item, label) {
   const opts = { schema: reviewSchema, phase: "review", label };
-  try {
-    return await agent(reviewPrompt(item), { ...opts, agentType: "anvil-reviewer" });
-  } catch (e) {
-    log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and restart the session to use the dedicated reviewer).`);
-    return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
+  for (const agentType of ["anvil:anvil-reviewer", "anvil-reviewer"]) {
+    try {
+      return await agent(reviewPrompt(item), { ...opts, agentType });
+    } catch (e) { /* try the next name */ }
   }
+  log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and run /reload-plugins to use the dedicated reviewer).`);
+  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
 }
 
 // ── Stage 1: resolve ──────────────────────────────────────────────────────────

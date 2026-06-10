@@ -48,7 +48,12 @@ plugins/anvil/
 - Skills install namespaced: `/anvil:setup`, `/anvil:plan`, `/anvil:critique`,
   `/anvil:adjudicate`, `/anvil:dispatch`.
 - Subagents: `anvil-critic` (`agents/critic.md`), `anvil-reviewer` (`agents/reviewer.md`).
-- Workflow scripts invoke subagents via `agent(..., {agentType: 'anvil-critic'})`.
+  When the plugin is installed, the registry names are NAMESPACED:
+  `anvil:anvil-critic`, `anvil:anvil-reviewer`. Agents register only after
+  `/reload-plugins` (or a session restart) — a mid-session install is invisible.
+- Workflow scripts invoke subagents by trying `anvil:anvil-critic` then
+  `anvil-critic` (same for reviewer), then degrade to the default subagent with
+  an inline rubric. Keep that order when touching the helpers.
 - Structured fenced-block tags (the extraction contract): critic →
   ` ```anvil-spec-critique `, synthesizer → ` ```anvil-spec-recommendations `,
   reviewer → ` ```anvil-review `. Severity labels everywhere: BLOCKER/HIGH/MEDIUM/LOW.

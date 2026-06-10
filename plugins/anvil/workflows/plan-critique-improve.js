@@ -280,20 +280,22 @@ const CRITIC_ANGLES = [
   phase("critique");
   log("Running two independent critics in parallel (differing angles/models)…");
 
-  // Prefer the anvil-critic plugin subagent; fall back to the default workflow
-  // subagent when the type isn't registered (running from the plugin-source
-  // repo, or a fresh install before the session restart). The critic prompt
-  // carries the severity rubric, read-only rules, and output contract inline,
-  // so the fallback loses polish, not the contract.
+  // Prefer the anvil-critic plugin subagent. Installed plugin agents register
+  // NAMESPACED ("anvil:anvil-critic"); the bare name covers any unprefixed
+  // registration. If neither resolves (plugin not installed / not reloaded),
+  // fall back to the default workflow subagent — the critic prompt carries the
+  // severity rubric, read-only rules, and output contract inline, so the
+  // fallback loses polish, not the contract.
   const runCritic = async (ac) => {
     const prompt = buildCriticPrompt(spec, ac);
     const opts = { model: ac.model, schema: CRITIQUE_SCHEMA, phase: "critique", label: `critic-${ac.label}` };
-    try {
-      return await agent(prompt, { ...opts, agentType: "anvil-critic" });
-    } catch (e) {
-      log(`critic-${ac.label}: anvil-critic agent type unavailable — falling back to the default subagent (install the anvil plugin and restart the session to use the dedicated critic).`);
-      return agent(prompt, opts);
+    for (const agentType of ["anvil:anvil-critic", "anvil-critic"]) {
+      try {
+        return await agent(prompt, { ...opts, agentType });
+      } catch (e) { /* try the next name */ }
     }
+    log(`critic-${ac.label}: anvil-critic agent type unavailable — falling back to the default subagent (install the anvil plugin and run /reload-plugins to use the dedicated critic).`);
+    return agent(prompt, opts);
   };
 
   const critiques = await parallel(CRITIC_ANGLES.map((ac) => () => runCritic(ac)));
