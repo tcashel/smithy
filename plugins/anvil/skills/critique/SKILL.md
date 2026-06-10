@@ -43,28 +43,31 @@ The synthesizer classifies every finding across the two critiques:
 - **Single-critic-only** — only one critic raised it. Medium confidence; one model's catch the other missed, or a possible false positive.
 - **Conflicting** — the critics disagree (one says a section is fine, the other says it's broken). Cannot be auto-resolved.
 
-The output is a single fenced ```anvil-spec-recommendations``` block containing:
+The Workflow tool returns a **structured `recommendations` object** (the synthesizer's schema-validated output) with:
 
-- a **Summary** (total findings, how many corroborated, overall launch-readiness),
-- priority-ordered **Recommended Edits** — each with concrete replacement spec text, a classification, and a severity (BLOCKER / HIGH / MEDIUM / LOW),
-- an **Open Questions** list — findings whose right answer depends on product intent, not spec quality,
-- a **Findings Triage** table classifying every finding.
+- `summary` — total findings, how many corroborated, overall launch-readiness,
+- `edits` — priority-ordered concrete spec edits, each with `classification`, `severity` (BLOCKER / HIGH / MEDIUM / LOW), `currentText`, `replacementText`, `rationale`, `applicable`,
+- `openQuestions` — findings whose right answer depends on product intent, not spec quality,
+- `conflicts` — findings the two critics disagree on,
+- `triage` — the full classification table, plus a `confidenceNote`.
+
+(The synthesizer also emits an ```` ```anvil-spec-recommendations ```` fenced block in its own transcript, but what YOU receive from the Workflow tool is the structured object — render from that.)
 
 ## What you report
 
-Surface the recommendations block to the user as-is, then add a short plain-language summary on top: how many corroborated findings, the highest severity present, and whether any conflicts or open questions exist.
+Render the object as a single ```` ```anvil-spec-recommendations ```` fenced block with these sections, in order: **Summary**, **Recommended Edits**, **Open Questions**, **Conflicts**, **Findings Triage** (table), **Confidence Note**. Show it to the user, then add a short plain-language summary on top: how many corroborated findings, the highest severity present, and whether any conflicts or open questions exist.
 
 Do **not** apply edits yourself. Recommendations are proposals; `/anvil:adjudicate` is the only surface that writes the spec.
 
 ## Persist the recommendations (so adjudicate can pick them up)
 
-The workflow does **not** modify the spec — `/anvil:adjudicate` is the sole write-back surface. So save the synthesizer's output where adjudicate looks for it:
+The workflow does **not** modify the spec — `/anvil:adjudicate` is the sole write-back surface. So save the rendered block where adjudicate looks for it:
 
 ```
 ~/.anvil/specs/<id>.recommendations.md
 ```
 
-Write the `anvil-spec-recommendations` block there (derive `<id>` from the spec id, or from the spec filename if you were given a path). Without this file, `/anvil:adjudicate` has nothing to resolve.
+Write the same `anvil-spec-recommendations` block you showed the user (derive `<id>` from the spec id, or from the spec filename if you were given a path). Without this file, `/anvil:adjudicate` has nothing to resolve.
 
 ## Handing off
 

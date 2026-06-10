@@ -2,8 +2,11 @@
 name: anvil-critic
 description: "Adversarial, read-only critique of an anvil task spec. Verifies every cited file path, walks each acceptance criterion for vagueness, and surfaces undefined behavior, contradictions, deferred decisions, scope creep, and missing context before the implementing agent ever runs. Emits one structured anvil-spec-critique block with BLOCKER/HIGH/MEDIUM/LOW findings."
 tools: Read, Grep, Glob, Bash
-model: sonnet
 ---
+
+<!-- No model pin: the plan-critique-improve workflow sets a DIFFERENT model per
+     critic invocation (opts.model) so the two critics' blind spots genuinely
+     differ. Invoked ad hoc, the critic inherits the session model. -->
 
 # Anvil Spec Critic
 

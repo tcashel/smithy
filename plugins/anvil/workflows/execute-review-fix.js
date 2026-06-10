@@ -7,7 +7,7 @@
 //     -> DRAFT PR -> review -> ONE auto-fix round -> STOP.
 //
 // It NEVER auto-merges. The atom stops at a draft PR for human adjudication
-// (Forge lesson #3). Items flow independently through `pipeline` so one bad
+// (LEARNINGS §4). Items flow independently through `pipeline` so one bad
 // spec doesn't sink the batch.
 //
 // NON-INVASIVE / OPERATOR-SCOPED. This workflow never shells out to the
@@ -44,7 +44,7 @@ export const meta = {
 };
 
 // One auto-fix round, then STOP — regardless of the re-review verdict.
-// Never a second round, never a merge (Forge lesson #3).
+// Never a second round, never a merge (LEARNINGS §4).
 const AUTO_FIX_ROUNDS = 1;
 
 // ── Bash recipe shared across atoms ───────────────────────────────────────────
@@ -52,7 +52,7 @@ const AUTO_FIX_ROUNDS = 1;
 // prompt so the agent runs the EXACT real stream-json invocation Forge uses
 // (mirrors claudeJobCommand + claudeJobStreamFilter in
 // src/core/agents/index.ts), and judges success by the terminal result event
-// in the sidecar — NOT the pipeline exit code (Forge lesson #2 / PR #64).
+// in the sidecar — NOT the pipeline exit code (LEARNINGS §2 / PR #64).
 
 // Projects ONLY the final {"type":"result"} event's text to stdout, exactly
 // like Forge's claudeJobStreamFilter. Kept on one line so it drops cleanly
@@ -140,7 +140,7 @@ const stage = (title, fn) => fn;
   log(`execute-review-fix: ${ids.length} issue(s): ${ids.join(", ")}`);
 
   // Each item is one atom. `pipeline` runs items independently so a confused
-  // agent on one spec (Forge lesson #1) doesn't abort the rest of the batch.
+  // agent on one spec (LEARNINGS §1) doesn't abort the rest of the batch.
   const atoms = await pipeline(
     ids.map((id, i) => ({ id, index: i })),
 
@@ -252,7 +252,7 @@ const stage = (title, fn) => fn;
 }
 
 // ── Stage 1: resolve ──────────────────────────────────────────────────────────
-// The spec is the SOLE input to the implementing agent (Forge lesson #1), so we
+// The spec is the SOLE input to the implementing agent (LEARNINGS §1), so we
 // resolve it from the operator-scoped store and verify it's non-empty here,
 // before spending an implement turn on a vague or missing spec.
 function resolvePrompt(item) {
@@ -314,7 +314,7 @@ function implementPrompt(item) {
   // it and report the sidecar verdict — NOT the pipe exit.
   const recipe = IMPLEMENT_RECIPE.replaceAll("{{SIDECAR}}", `$HOME/.anvil/runs/${item.id}/agent.stream.jsonl`)
     .replaceAll("{{PROMPT_FILE}}", `$HOME/.anvil/runs/${item.id}/agent-prompt.txt`)
-    .replaceAll("{{MODEL}}", "${ANVIL_IMPLEMENT_MODEL:-claude-sonnet-4-5}")
+    .replaceAll("{{MODEL}}", "${ANVIL_IMPLEMENT_MODEL:-claude-sonnet-4-6}")
     .replaceAll("{{WORKTREE}}", item.worktree || `$HOME/.anvil/runs/${item.id}/worktree`)
     .replaceAll("{{BASE_REF}}", item.baseRef || "origin/main");
 
@@ -328,7 +328,7 @@ SPEC FILE (the SOLE input the implementing agent may see): ${item.specPath}
 
 1. Build the implementing agent's prompt file. The implementing agent must see
    ONLY the spec body — not this conversation, not the repo's CLAUDE.md, nothing
-   else (Forge lesson #1). Write to $HOME/.anvil/runs/${item.id}/agent-prompt.txt:
+   else (LEARNINGS §1). Write to $HOME/.anvil/runs/${item.id}/agent-prompt.txt:
      - A one-line role header: working dir is the worktree, branch is ${item.branch}.
      - The VERBATIM contents of ${item.specPath}.
      - Instructions: implement the spec; the agent OWNS its commits — use
@@ -424,7 +424,7 @@ const prSchema = {
 // ── Stage 5/6: review (anvil-reviewer subagent) ───────────────────────────────
 // The reviewer emits exactly one ```anvil-review fenced block; the subagent's
 // system prompt owns that contract. Findings are published to the PR with a
-// HIDDEN MARKER so re-runs never duplicate a comment (Forge lesson #5).
+// HIDDEN MARKER so re-runs never duplicate a comment (LEARNINGS §6).
 function reviewPrompt(item) {
   return `Review draft PR #${item.prNumber} for bd issue ${item.id}.
 Working directory / worktree: ${item.worktree}
