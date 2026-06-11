@@ -78,9 +78,10 @@ echo "$WF"
 (`/anvil:setup` persists `ANVIL_PLUGIN_ROOT`; the `find` is the fallback.) Then invoke the Workflow tool with:
 
 - **scriptPath:** the resolved absolute path (the value of `$WF`)
-- **args:** the chosen ready issue id(s), space-separated (the workflow resolves
-  each id's spec body from `~/.anvil/specs/<id>.md` and reads the frontier itself
-  via `bd ready` under `$BEADS_DIR`).
+- **args:** the chosen ready issue id(s), space-separated. The workflow resolves
+  each id's spec body from `~/.anvil/specs/<id>.md`; it does NOT read the
+  frontier itself — reading `bd ready` and passing only ready ids is THIS
+  skill's job (step 1).
 
 For each issue the workflow runs the **atom**, and you do not babysit it:
 

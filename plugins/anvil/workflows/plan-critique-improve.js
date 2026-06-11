@@ -212,20 +212,25 @@ const RECOMMENDATIONS_SCHEMA = {
 
 // ─── The two critic angles ──────────────────────────────────────────────────
 //
-// Deliberately different lenses so the critics' blind spots differ. We index
-// into this list (no randomness) and the runtime picks differing models per
-// agentType invocation; the synthesizer is told each critic's angle so it can
-// reason about WHY a finding might be single-critic-only.
+// Deliberately different lenses AND different models so the critics' blind
+// spots differ on both axes. We index into this list (no randomness) and pass
+// each entry's `model` explicitly via opts.model (the anvil-critic agent
+// definition pins no model); the synthesizer is told each critic's angle so it
+// can reason about WHY a finding might be single-critic-only. Spec quality is
+// the highest-leverage phase, so the strongest model takes the correctness
+// lens and a different model family takes the completeness lens.
 
 const CRITIC_ANGLES = [
   {
     label: "A",
+    model: "opus",
     angle: "Correctness & contracts",
     focus:
       "Hunt for vague/untestable acceptance criteria, undefined error & empty-input behavior, contradictions between sections, and file paths the spec cites but that may not exist. Verify every path against the repo with read-only tools. Assume a literal-minded agent that interprets any ambiguity in the worst way.",
   },
   {
     label: "B",
+    model: "sonnet",
     angle: "Completeness & self-containment",
     focus:
       "Hunt for missing context the implementing agent would need (it sees ONLY this spec — no CLAUDE.md, no conversation), decisions silently deferred to the agent ('choose an appropriate X'), scope creep, missing integration points (how existing code calls the new code), and unstated assumptions about config/dependencies/conventions.",
@@ -264,7 +269,8 @@ const CRITIC_ANGLES = [
     { schema: SPEC_SCHEMA, phase: "load", label: "load-spec" },
   );
 
-  if (!spec.found || !spec.body) {
+  if (!spec || !spec.found || !spec.body) {
+    if (!spec) return { error: "spec-load-failed", specPath: specArg };
     log(`Spec not found or empty at ${spec.specPath || specArg}. Nothing to critique.`);
     return { error: "spec-not-found", specPath: spec.specPath || specArg };
   }
@@ -274,22 +280,42 @@ const CRITIC_ANGLES = [
   phase("critique");
   log("Running two independent critics in parallel (differing angles/models)…");
 
-  const critiques = await parallel(
-    CRITIC_ANGLES.map((ac) => () =>
-      agent(buildCriticPrompt(spec, ac), {
-        agentType: "anvil-critic",
-        schema: CRITIQUE_SCHEMA,
-        phase: "critique",
-        label: `critic-${ac.label}`,
-      }),
-    ),
-  );
+  // Prefer the anvil-critic plugin subagent. Installed plugin agents register
+  // NAMESPACED ("anvil:anvil-critic"); the bare name covers any unprefixed
+  // registration. If neither resolves (plugin not installed / not reloaded),
+  // fall back to the default workflow subagent — the critic prompt carries the
+  // severity rubric, read-only rules, and output contract inline, so the
+  // fallback loses polish, not the contract.
+  const runCritic = async (ac) => {
+    const prompt = buildCriticPrompt(spec, ac);
+    const opts = { model: ac.model, schema: CRITIQUE_SCHEMA, phase: "critique", label: `critic-${ac.label}` };
+    for (const agentType of ["anvil:anvil-critic", "anvil-critic"]) {
+      try {
+        return await agent(prompt, { ...opts, agentType });
+      } catch (e) { /* try the next name */ }
+    }
+    log(`critic-${ac.label}: anvil-critic agent type unavailable — falling back to the default subagent (install the anvil plugin and run /reload-plugins to use the dedicated critic).`);
+    return agent(prompt, opts);
+  };
 
+  const critiques = await parallel(CRITIC_ANGLES.map((ac) => () => runCritic(ac)));
+
+  // parallel() resolves a failed/skipped agent to null — degrade, don't throw.
   const [critiqueA, critiqueB] = critiques;
-  const totalFindings = (critiqueA.findings?.length || 0) + (critiqueB.findings?.length || 0);
+  if (!critiqueA && !critiqueB) {
+    log("Both critics failed — nothing to synthesize.");
+    return { error: "critics-failed", specId: spec.specId, specPath: spec.specPath };
+  }
+  if (!critiqueA || !critiqueB) {
+    log(
+      `Critic ${!critiqueA ? "A" : "B"} failed — proceeding single-critic. ` +
+        "Corroboration is unavailable; the synthesizer is told so.",
+    );
+  }
+  const totalFindings = (critiqueA?.findings?.length || 0) + (critiqueB?.findings?.length || 0);
   log(
-    `Critic A (${CRITIC_ANGLES[0].angle}): ${critiqueA.findings?.length || 0} findings. ` +
-      `Critic B (${CRITIC_ANGLES[1].angle}): ${critiqueB.findings?.length || 0} findings. ` +
+    `Critic A (${CRITIC_ANGLES[0].angle}): ${critiqueA?.findings?.length ?? "FAILED"} findings. ` +
+      `Critic B (${CRITIC_ANGLES[1].angle}): ${critiqueB?.findings?.length ?? "FAILED"} findings. ` +
       `${totalFindings} raw total.`,
   );
 
@@ -297,11 +323,23 @@ const CRITIC_ANGLES = [
   phase("synthesize");
   log("Synthesizing critiques → corroborated / single-critic / conflicting + open questions…");
 
+  // Synthesis is a planning-phase judgment call — run it on the strongest model.
   const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB), {
     schema: RECOMMENDATIONS_SCHEMA,
+    model: "opus",
     phase: "synthesize",
     label: "synthesizer",
   });
+
+  if (!recommendations) {
+    log("Synthesizer failed — returning the raw critiques for manual triage.");
+    return {
+      error: "synthesizer-failed",
+      specId: spec.specId,
+      specPath: spec.specPath,
+      critiques: { A: critiqueA, B: critiqueB },
+    };
+  }
 
   log(
     `Recommendations: ${recommendations.edits?.length || 0} proposed edit(s), ` +
@@ -380,12 +418,18 @@ function buildCriticPrompt(spec, angleConfig) {
 }
 
 function buildSynthPrompt(spec, critiqueA, critiqueB) {
+  const singleCritic = !critiqueA || !critiqueB;
   return [
     "You are the anvil Critique Synthesizer. You are a NEUTRAL mediator, not a third critic — do not",
     "add your own opinions to severity; defer to the critics.",
     "",
-    "You are given the original spec and two INDEPENDENT critiques produced from different angles by",
-    "different models. Different models have different blind spots:",
+    singleCritic
+      ? "NOTE: one critic FAILED to return. You have only ONE critique below. Corroboration is\n" +
+        "impossible: classify every finding 'single-critic-only', leave `conflicts` empty, and say in\n" +
+        "the confidenceNote that this was a single-critic pass."
+      : "You are given the original spec and two INDEPENDENT critiques produced from different angles\n" +
+        "by different models (Critic A: opus, correctness lens; Critic B: sonnet, completeness lens).\n" +
+        "Different models and lenses have different blind spots:",
     "- A finding raised by BOTH critics is almost certainly real → classification 'corroborated'.",
     "- A finding raised by only ONE critic is medium confidence → 'single-critic-only' (use judgment).",
     "- A finding the two critics DISAGREE on (one says fine, one says broken) → a CONFLICT; do NOT",
@@ -412,11 +456,11 @@ function buildSynthPrompt(spec, critiqueA, critiqueB) {
     "",
     spec.body,
     "",
-    `## Critique A — angle: ${critiqueA.angle || "(A)"}`,
-    JSON.stringify(critiqueA, null, 2),
+    `## Critique A — angle: ${critiqueA?.angle || "(A)"}`,
+    critiqueA ? JSON.stringify(critiqueA, null, 2) : "(critic A failed — no critique)",
     "",
-    `## Critique B — angle: ${critiqueB.angle || "(B)"}`,
-    JSON.stringify(critiqueB, null, 2),
+    `## Critique B — angle: ${critiqueB?.angle || "(B)"}`,
+    critiqueB ? JSON.stringify(critiqueB, null, 2) : "(critic B failed — no critique)",
     "",
     "## Output",
     "First emit a single fenced block tagged exactly `anvil-spec-recommendations` with: Summary,",

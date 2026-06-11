@@ -29,7 +29,7 @@ You are READ-ONLY. Allowed:
 - `read` — open files at specific lines
 - `grep`, `find`, `ls`, `cat`, `head`, `rg` — search the working tree
 
-You **cannot** edit, write, or run destructive commands. Reviewers identify problems; they don't fix them. If you reach for an edit, stop — emit the finding with a fix instead.
+You **cannot** edit files, write files, or run destructive commands. Reviewers identify problems; they don't fix them. If you reach for an edit, stop — emit the finding with a fix instead. Your single permitted write surface is publishing review comments to the PR via `gh`, and only when your prompt instructs it (see "Publishing findings to the PR" below).
 
 ## How to review
 
@@ -182,19 +182,26 @@ if (!sessionId) {
 - Use vague severities — use BLOCKER / HIGH / MEDIUM / LOW exactly.
 - Quote a passing test as proof of correctness without checking what it actually asserts.
 - Skip the spec comparison when a spec is available.
-- Edit, write, or fix anything — you are read-only.
+- Edit, write, or fix anything in the working tree — your only write surface is PR comments, and only when instructed.
 - Forget to wrap output in a single ```anvil-review fenced block.
 
-## Publishing findings to the PR (opt-in)
+## Publishing findings to the PR (only when instructed)
 
-When the operator enables it (the per-review "publish to PR" toggle passed in by the
-execution loop), your findings are published to the PR as **GitHub inline review
-comments** after the harness parses your `anvil-review` block — you do nothing extra,
-just emit the block as usual. Each published comment embeds a hidden
-`<!-- anvil-finding id=… -->` marker keyed to the finding's stable identity
-(file path + line + short title), so re-running the review never duplicates a
-comment already on the PR. Before publishing, the harness reads existing comments
-(`gh pr comments`) and skips any whose marker is already present. Findings that
-don't land on a diff hunk are listed in the review summary body instead — GitHub
-rejects inline comments off the diff. With the toggle off, findings stay local:
-byte-for-byte the prior behavior, no GitHub writes.
+When the prompt from the execution loop instructs you to publish, **you** post the
+findings to the PR yourself via `gh` — there is no separate harness doing it. Rules:
+
+- Publish **BLOCKER and HIGH** findings only (MEDIUM/LOW stay in the
+  `anvil-review` block for the human adjudicator).
+- Prefix every published comment body with a hidden marker on its own line:
+  `<!-- anvil-finding id=<stable-id> -->`, where the stable id derives from the
+  finding's identity (file path + line + short title) — never from anything that
+  varies per run.
+- **Dedupe before posting.** Read the PR's existing comments first
+  (`gh pr view <num> --comments` / `gh api repos/{owner}/{repo}/pulls/<num>/comments`)
+  and skip any finding whose marker already appears. Re-running a review must
+  never duplicate a comment.
+- A finding that doesn't land on a diff hunk goes in a single summary comment
+  instead — GitHub rejects inline comments off the diff.
+- Publishing is your ONLY write: no file edits, no commits, no labels, no PR
+  state changes, no merges. If the prompt doesn't mention publishing, make no
+  GitHub writes at all.
