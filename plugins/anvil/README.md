@@ -4,7 +4,7 @@
 
 anvil is a non-invasive, operator-scoped reassembly of the Forge pipeline — `plan → critique → adjudicate → dispatch → review → fix` — built entirely from bare Claude Code primitives: skills, the Workflow tool, subagents, and the [beads](https://github.com/gastownhall/beads) issue tracker (`bd` / `br`).
 
-You shape a piece of work into a self-contained spec, stress-test it with a multi-critic panel, adjudicate the cruxes yourself, then hand the locked spec to a headless loop that launches an implementing agent, gates it on quality, opens a **draft** PR, reviews it, and runs one auto-fix round. The loop is a job, not a show. It stops at the draft PR for you to adjudicate the merge. **It never auto-merges.**
+You shape a piece of work into a self-contained spec, stress-test it with a multi-critic panel, adjudicate the cruxes yourself, then hand the locked spec to an unattended loop: a subagent builds it in a disposable worktree, the loop gates it on quality, opens a **draft** PR, reviews it twice over, and runs one auto-fix round. The loop is a job, not a show. It stops at the draft PR for you to adjudicate the merge. **It never auto-merges.**
 
 ## Zero repo imposition
 
@@ -17,7 +17,7 @@ This is the whole point. anvil keeps **all** of its state operator-scoped and ou
 
 Your teammates never see anvil in the repo. Nothing about your planning leaks into the working tree.
 
-anvil shells out only to bare tooling — `claude` (headless), `gh`, `bd`/`br`, and `git`. It **does not** invoke the `forge` binary; that is the entire premise of the experiment (see below).
+anvil shells out only to bare tooling — `gh`, `bd`/`br`, `git`, and `codex` for its second critic and second reviewer. Everything else is a workflow subagent inside your session, not a spawned CLI. It **does not** invoke the `forge` binary; that is the entire premise of the experiment (see below).
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ anvil shells out only to bare tooling — `claude` (headless), `gh`, `bd`/`br`, 
   - `bd` (Go/Dolt): https://github.com/gastownhall/beads
   - `br` (Rust/SQLite): https://github.com/Dicklesworthstone/beads_rust
 - **`gh`** — the GitHub CLI, authenticated (`gh auth status`). Used to open draft PRs and publish review findings.
-- **`claude`** — the Claude Code CLI, available headless for the Workflow scripts that supervise real work.
+- **`codex`** *(optional)* — the codex CLI. When present it is the panel's third critic and the atom's second reviewer, giving cross-model-family corroboration. Absent, both legs report themselves unavailable and the rest of the pipeline is unaffected.
 
 ## Setup
 
@@ -83,17 +83,19 @@ One skill sets anvil up; four drive the pipeline from idea to a locked, dispatch
 
 - **`/anvil:adjudicate`** — *You* resolve the cruxes. Accept, reject, or rewrite each recommendation, folding the decisions back into the spec until it is mergeable-quality and locked. When a spec is locked it becomes a `bd` issue whose **body** is `~/.anvil/specs/<id>.md`.
 
-- **`/anvil:dispatch`** — Read `bd ready` (honoring `$BEADS_DIR`) for the work-list and run the execution atom over each ready spec: launch an implementing agent → quality gate → **draft** PR → review (`anvil-reviewer`) → one auto-fix round → stop. This is invoked via the bundled `execute-review-fix.js` workflow. The atom stops at the draft PR. You adjudicate the merge.
+- **`/anvil:dispatch`** — Read `bd ready` (honoring `$BEADS_DIR`) for the work-list and run the execution atom over each ready spec: an implementing subagent builds it in a disposable worktree → quality gate → **draft** PR → review by two reviewers (`anvil-reviewer`, plus a `codex` relay when it's installed; findings are tagged by source and the severer verdict wins) → one auto-fix round → stop. This is invoked via the bundled `execute-review-fix.js` workflow. The atom stops at the draft PR. You adjudicate the merge.
 
 ## The bundled Workflow scripts
 
-Two headless Workflow scripts do the supervised, long-running work. Skills invoke them through the Claude Code Workflow tool with a `scriptPath` pointing at the bundled file. (`${CLAUDE_PLUGIN_ROOT}` is not usable from skill text, so the skills resolve the absolute path at runtime via `$ANVIL_PLUGIN_ROOT` — set by `/anvil:setup` — with a `find` over `~/.claude/plugins` as a fallback.)
+Two unattended Workflow scripts do the supervised, long-running work. Skills invoke them through the Claude Code Workflow tool with a `scriptPath` pointing at the bundled file. (`${CLAUDE_PLUGIN_ROOT}` is not usable from skill text, so the skills resolve the absolute path at runtime via `$ANVIL_PLUGIN_ROOT` — set by `/anvil:setup` — with a `find` over `~/.claude/plugins` as a fallback.)
 
 - **`workflows/plan-critique-improve.js`** — fans out the critic panel (two critics, plus the codex leg when available) and synthesizes the cruxes. It leaves the spec file **unchanged** and returns the recommendations; `/anvil:adjudicate` is the only surface that writes a spec. Backs `/anvil:critique` (and the planning loop).
 
-- **`workflows/execute-review-fix.js`** — runs the execution atom per ready spec: launch → quality gate → draft PR → review → auto-fix (`autoFixRounds` default `1`) → stop. Backs `/anvil:dispatch`.
+- **`workflows/execute-review-fix.js`** — runs the execution atom per ready spec: implement → quality gate → draft PR → review (both reviewers) → auto-fix (`autoFixRounds` default `1`) → stop. Backs `/anvil:dispatch`.
 
-Both run headless. They trust the terminal `{"type":"result"}` event from each `claude` run — not the pipeline exit code — as the source of truth in both directions, and they extract each agent's single tagged fenced block as the contract. When the reviewer publishes findings to a PR, each comment carries a hidden `<!-- anvil-finding id=... -->` marker so re-running never duplicates a comment.
+Every stage in both scripts is a workflow **subagent** — sanctioned by your session, inheriting your permission mode, returning a schema-validated object. Neither script spawns a `claude` CLI. Each agent also emits its single tagged fenced block as the human-readable contract. When a reviewer publishes findings to a PR, each comment carries a hidden `<!-- anvil-finding id=... -->` marker so re-running never duplicates a comment.
+
+The one thing they do shell out to is `codex`, for the panel's third critic and the atom's second reviewer. Both run it in the background and poll for it in bounded steps, because a single blocking wait would outlive the tool's per-call limit; and both report an honest unavailability when the binary is missing rather than inventing a second opinion.
 
 ## This is an experiment
 

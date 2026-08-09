@@ -527,7 +527,10 @@ function buildCriticPrompt(spec, angleConfig) {
 // critic prompt A and B get — that is what makes codex's findings comparable
 // rather than a differently-shaped opinion.
 function buildCodexCriticPrompt(spec, targetRepo) {
-  const promptFile = `$HOME/.anvil/runs/critique/${spec.specId}/codex-prompt.txt`;
+  const dir = `$HOME/.anvil/runs/critique/${spec.specId}`;
+  const promptFile = `${dir}/codex-prompt.txt`;
+  const outFile = `${dir}/codex-out.log`;
+  const pidFile = `${dir}/codex.pid`;
   return [
     "You are the RELAY for the critic panel's third leg. You do NOT critique the spec yourself:",
     "you hand it to the `codex` CLI — a different model family, which is the entire point — and",
@@ -547,15 +550,34 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "",
     `Write the critique prompt at the bottom of this message to ${promptFile}`,
     "(`mkdir -p` its directory first) — it is far too long to quote safely on a command line —",
-    "then run:",
+    "then run it in the BACKGROUND and poll for it. Never wait for codex in a single foreground",
+    "call: at this reasoning effort it thinks for a long time, and one blocking wait would exceed",
+    "your tool's per-call limit, get moved to the background, and take the result with it.",
     "",
     "```bash",
-    `codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' "$(cat ${promptFile})"`,
+    `nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\`,
+    `  "$(cat ${promptFile})" > ${outFile} 2>&1 < /dev/null &`,
+    `echo $! > ${pidFile}`,
     "```",
     "",
-    "Give it room to finish; at that reasoning effort it thinks for a while. If the command fails",
-    "— non-zero exit, an auth or model error, empty output — return available=false with the",
-    "error text in the summary. Again: never substitute your own critique for codex's.",
+    "Then run this poll REPEATEDLY, as separate calls, until it prints CODEX_DONE — up to about",
+    "5 times (~20 minutes). Each call self-bounds inside the limit; the LOOP is what waits.",
+    "",
+    "```bash",
+    `PID="$(cat ${pidFile} 2>/dev/null || echo)"; W=0`,
+    'while [ "$W" -lt 240 ]; do',
+    '  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then echo CODEX_DONE; break; fi',
+    "  sleep 10; W=$((W + 10))",
+    "done",
+    `if [ -f ${outFile} ]; then wc -c < ${outFile} | tr -d ' '; fi`,
+    `tail -5 ${outFile} 2>/dev/null`,
+    "exit 0",
+    "```",
+    "",
+    'If it is still running after your last poll, `kill "$PID"` and return available=false with',
+    "whatever it produced — an orphan left grinding is worse than an honest gap. If the run fails",
+    "outright — non-zero exit, an auth or model error, empty output — return available=false with",
+    "the error text in the summary. Again: never substitute your own critique for codex's.",
     "",
     "## 3. Recover the FULL message before you relay it",
     "codex's terminal output can be clipped mid-message, and a clipped critique silently loses",

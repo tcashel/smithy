@@ -72,6 +72,15 @@ invocation fails, the leg reports itself unavailable — it never fabricates a t
 opinion — and the panel degrades to exactly the two-critic behavior above. Going past
 three is still diminishing returns.
 
+**The same argument applies after the code is written.** The execution atom reviews
+every draft PR twice: `anvil-reviewer` and a codex relay, findings tagged by source and
+merged, with the severer of the two verdicts winning — a reviewer that found a blocker
+is not outvoted by one that did not look in the same place. Reviewing is where
+corroboration is cheapest to act on, because the fix round is already there. The
+post-fix re-review deliberately skips codex: that verdict is informational (the atom
+stops either way), and a second full pass is real money for a number nothing branches
+on.
+
 ## 4. The atom stops at a draft PR
 
 The execution atom is fixed: launch -> quality gate -> draft PR -> review ->

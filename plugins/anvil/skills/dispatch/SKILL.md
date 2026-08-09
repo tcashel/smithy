@@ -1,16 +1,15 @@
 ---
 name: dispatch
-description: Pull the beads ready-frontier (bd ready, honoring $BEADS_DIR) and run the headless execute -> quality gate -> draft PR -> review -> one auto-fix round loop over the chosen issue(s). Glue around the execute-review-fix workflow. Use after /anvil:adjudicate has locked specs into bd issues and you want them built. Stops at draft PRs for human adjudication; never merges.
+description: Pull the beads ready-frontier (bd ready, honoring $BEADS_DIR) and run the unattended implement -> quality gate -> draft PR -> review -> one auto-fix round loop over the chosen issue(s). Glue around the execute-review-fix workflow. Use after /anvil:adjudicate has locked specs into bd issues and you want them built. Stops at draft PRs for human adjudication; never merges.
 ---
 
 # /anvil:dispatch — run the ready frontier as jobs
 
 This is the **Run** surface. Adjudication is done, specs are locked into beads issues,
 and now you want them **built without watching**. dispatch reads the ready frontier
-from beads, picks the work, and hands it to the execution workflow. That workflow runs
-**headless** and is a job, not a show: it implements, gates, opens a **draft PR**, reviews,
-applies **one** auto-fix round, and **stops**. The human adjudicates the merge — anvil
-**never merges**.
+from beads, picks the work, and hands it to the execution workflow. That workflow is a
+job, not a show: it implements, gates, opens a **draft PR**, reviews, applies **one**
+auto-fix round, and **stops**. The human adjudicates the merge — anvil **never merges**.
 
 dispatch is deliberately thin. All the real machinery (the implementing subagent, the
 quality gate, the two reviewers, the single fix round) lives in
@@ -157,5 +156,5 @@ closed, and leave anything still in flight alone.
 - **Zero repo imposition.** All beads/spec state stays under `$BEADS_DIR` and
   `~/.anvil/specs`. Never commit a `.beads` file into the target repo, never edit
   the repo's CLAUDE.md or settings, never require a per-worktree committed file.
-- **Don't watch.** The loop is headless. Kick it off, let it run, read the result.
+- **Don't watch.** The loop is unattended. Kick it off, let it run, read the result.
 - **Never merge.** The atom ends at a reviewed draft PR awaiting human adjudication.

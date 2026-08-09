@@ -20,9 +20,11 @@ parts, or does the bespoke app still earn its keep?* anvil reassembles the loop
 from bare parts so we can find out. Two cardinal rules follow from that and
 **must never be violated** — breaking either invalidates the experiment:
 
-1. **anvil MUST NEVER shell out to the `forge` binary.** Use only `claude`
-   (headless), `gh`, `bd`/`br`, `git`, and the Workflow tool. If you reach for
-   `forge ...`, stop and use the bare equivalent.
+1. **anvil MUST NEVER shell out to the `forge` binary.** Use only `gh`, `bd`/`br`,
+   `git`, `codex` (the optional second critic and second reviewer), and the
+   Workflow tool. Every agent is a workflow subagent, not a spawned CLI — see
+   LEARNINGS §11 for why the implement stage stopped spawning `claude`. If you
+   reach for `forge ...`, stop and use the bare equivalent.
 2. **Zero repo imposition.** All anvil state is operator-scoped and out-of-repo:
    beads in `$BEADS_DIR` (default `~/.anvil/beads`), spec bodies in
    `~/.anvil/specs/<id>.md`, run artifacts in `~/.anvil/runs/`. anvil never

@@ -152,6 +152,22 @@ const reviewSchema = {
   },
 };
 
+// The codex reviewer returns the same shape plus `available`. False means the
+// codex CLI was missing or the invocation failed, and findings MUST then be
+// empty — an honest "no second opinion" beats an invented one, exactly as in the
+// critique panel's third critic (LEARNINGS §3).
+const codexReviewSchema = {
+  type: "object",
+  required: ["verdict", "available"],
+  properties: {
+    ...reviewSchema.properties,
+    available: {
+      type: "boolean",
+      description: "True only if codex actually ran and produced a review. False when the CLI is absent or the invocation failed — findings must then be empty.",
+    },
+  },
+};
+
 const fixSchema = {
   type: "object",
   required: ["applied"],
@@ -263,10 +279,10 @@ const stage = (title, fn) => fn;
       return { ...item, ...r };
     }),
 
-    // ── Stage 5: review the draft PR (anvil-reviewer subagent) ───────────────
+    // ── Stage 5: review the draft PR — two reviewers, two model families ─────
     stage("review", async (item) => {
       if (!item.prNumber) return item;
-      const review = await runReview(item, `review:${item.id}`);
+      const review = await runBothReviews(item, `review:${item.id}`);
       return { ...item, review };
     }),
 
@@ -294,7 +310,7 @@ const stage = (title, fn) => fn;
 
         // Re-review once so the draft PR carries an up-to-date verdict for the
         // human. We do NOT branch on it — no second fix round, ever.
-        const reReview = await runReview(cur, `re-review:${item.id}:r${round + 1}`);
+        const reReview = await runBothReviews(cur, `re-review:${item.id}:r${round + 1}`, { withCodex: false });
         cur = { ...cur, review: reReview ?? cur.review };
       }
       return finalize({ ...cur, fixRounds: AUTO_FIX_ROUNDS });
@@ -304,7 +320,10 @@ const stage = (title, fn) => fn;
   // Summary only — the durable record lives in bd (issue status) and GitHub
   // (the labeled draft PR), NOT here. See the run-state caveat at the top.
   for (const a of (atoms || []).filter(Boolean)) {
-    log(`  ${a.id}: status=${a.status ?? "unknown"} pr=${a.prUrl ?? "—"} verdict=${a.review?.verdict ?? "—"}`);
+    log(
+      `  ${a.id}: status=${a.status ?? "unknown"} pr=${a.prUrl ?? "—"} verdict=${a.review?.verdict ?? "—"}` +
+        ` codex=${a.review ? (a.review.codexLeg ?? "unavailable") : "—"}`,
+    );
   }
   return { atoms };
 }
@@ -322,6 +341,77 @@ async function runReview(item, label) {
   }
   log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and run /reload-plugins to use the dedicated reviewer).`);
   return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
+}
+
+// ── Two reviewers, two model families ────────────────────────────────────────
+// The panel taught us this (LEARNINGS §3) and four consecutive drover rounds paid
+// for it: the codex leg caught merge-blocking defects the same-family reviewer
+// did not. So the atom reviews with both — anvil-reviewer, then a relay of the
+// `codex` CLI — and merges what they found. Run in sequence, not in parallel:
+// nesting a parallel() inside a pipeline stage is not a shape this runtime is
+// known to support, and a slower review is cheaper than a mystery.
+//
+// codex is OPTIONAL throughout. No binary, a failed invocation, or a failed relay
+// agent all mean "no second opinion" — never a fabricated one.
+async function runBothReviews(item, label, opts) {
+  const primary = await runReview(item, label);
+  // The post-fix re-review skips codex on purpose: that verdict is informational
+  // (the atom stops either way), and a second full xhigh pass is real money for a
+  // number nothing branches on. Say "not-rerun" rather than "unavailable" — the
+  // leg did run, on the review that mattered.
+  if (opts && opts.withCodex === false) {
+    const merged = mergeReviews(primary, null);
+    return merged ? { ...merged, codexLeg: "not-rerun" } : merged;
+  }
+  const codexRaw = await agent(codexReviewPrompt(item), {
+    schema: codexReviewSchema,
+    phase: "review",
+    label: `${label}:codex`,
+    model: "sonnet",
+  });
+  const codex = codexRaw && codexRaw.available !== false ? codexRaw : null;
+  log(
+    codex
+      ? `${label}: codex reviewer RAN (${codex.findings?.length ?? 0} findings) — cross-family review.`
+      : `${label}: codex reviewer unavailable (${codexRaw?.summary || "CLI missing, or the relay agent failed"}) — single-family review.`,
+  );
+  return mergeReviews(primary, codex);
+}
+
+// Merge two reviews into the one object the fix stage consumes. Findings keep
+// their source so the fixer — and the human reading the summary — can see which
+// reviewer raised what, and so a finding both raised reads as corroboration
+// across model families rather than as duplication.
+function mergeReviews(primary, codex) {
+  const tag = (review, source) =>
+    (review?.findings || []).map((f) => ({ ...f, source }));
+  if (!primary && !codex) return null;
+  const findings = [...tag(primary, "anvil-reviewer"), ...tag(codex, "codex")];
+  const summary = [
+    primary?.summary ? `anvil-reviewer: ${primary.summary}` : null,
+    codex?.summary ? `codex: ${codex.summary}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    // The SEVERER verdict wins: a reviewer that found a blocker is not outvoted
+    // by one that did not look in the same place.
+    verdict: severerVerdict(primary?.verdict, codex?.verdict),
+    summary,
+    findings,
+    codexLeg: codex ? "ran" : "unavailable",
+  };
+}
+
+// The rank table lives INSIDE the function on purpose: a `const` declared after
+// the workflow body is still in the temporal dead zone when a stage callback
+// runs (the bug fixed in 1e7a61c). Function declarations hoist; consts do not.
+function severerVerdict(a, b) {
+  const order = { approve: 0, "request-changes": 1, block: 2 };
+  const norm = (v) => (typeof v === "string" ? v.toLowerCase() : "");
+  const rank = (v) => (order[norm(v)] ?? -1);
+  if (rank(a) < 0 && rank(b) < 0) return "request-changes"; // neither reviewer spoke — do not approve by default
+  return rank(a) >= rank(b) ? norm(a) : norm(b);
 }
 
 // ── Stage 1: resolve ──────────────────────────────────────────────────────────
@@ -467,16 +557,96 @@ any finding whose marker already appears on the PR, so re-running never
 duplicates a comment.`;
 }
 
+// ── Stage 5/6: the codex reviewer ────────────────────────────────────────────
+// A relay, not a reviewer: it hands the diff to another model family's CLI and
+// transcribes what comes back. It runs codex in the BACKGROUND and polls, for
+// the reason in LEARNINGS §10 — at xhigh reasoning over a real diff, codex
+// routinely outlives a single Bash call, and a foreground wait would be pushed
+// to the background taking the result with it.
+function codexReviewPrompt(item) {
+  const dir = `$HOME/.anvil/runs/${item.id}/codex-review`;
+  return `You are the RELAY for anvil's SECOND reviewer of draft PR #${item.prNumber}
+(bd issue ${item.id}). You do not review the diff yourself: you hand it to the \`codex\`
+CLI — a different model family, which is the whole point — and report what it found.
+Use Bash. Working directory: ${item.worktree}
+
+## 1. Is codex here?
+\`command -v codex\`. If it is not on PATH, STOP: return available=false, findings=[],
+verdict="approve", and a summary saying the codex CLI is not installed. Do NOT review
+the diff yourself and do NOT invent findings — an honest "no second opinion" is the
+correct result, and a fabricated one poisons exactly the cross-family signal this
+reviewer exists to provide.
+
+## 2. Build the review prompt
+\`mkdir -p ${dir}\`, then write a prompt file at ${dir}/prompt.txt containing:
+  - the instruction: adversarially review this diff against the spec it claims to
+    implement; report only defects you can point at in the diff; label each
+    BLOCKER / HIGH / MEDIUM / LOW; give file:line, evidence, why it matters, and a fix;
+    finish with a verdict of approve | request-changes | block.
+  - the spec body, verbatim, from ${item.specPath}
+  - the diff, from \`gh pr diff ${item.prNumber}\` (cap at ~60k chars; say so if you cut it)
+
+## 3. Run it in the BACKGROUND, then poll
+Never wait for codex in one foreground call — it thinks for a long time at this
+reasoning effort, and a single blocking wait would exceed your tool's per-call limit,
+get moved to the background, and take the result with it.
+
+\`\`\`bash
+cd ${item.worktree}
+nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\
+  "$(cat ${dir}/prompt.txt)" > ${dir}/out.log 2>&1 < /dev/null &
+echo $! > ${dir}/pid
+\`\`\`
+
+Then run this poll REPEATEDLY, as separate calls, until it prints CODEX_DONE — up to
+about 5 times (~20 minutes). Each call self-bounds well inside the limit; the loop is
+what waits, never a single call.
+
+\`\`\`bash
+PID="$(cat ${dir}/pid 2>/dev/null || echo)"; W=0
+while [ "$W" -lt 240 ]; do
+  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then echo CODEX_DONE; break; fi
+  sleep 10; W=$((W + 10))
+done
+if [ -f ${dir}/out.log ]; then wc -c < ${dir}/out.log | tr -d ' '; fi
+tail -5 ${dir}/out.log 2>/dev/null
+exit 0
+\`\`\`
+
+If it is still running after your last poll, \`kill "$PID"\` and return available=false
+with what you have — an orphan left grinding is worse than an honest gap.
+
+## 4. Recover the FULL message before you relay it
+codex's terminal output can be clipped mid-message, and a clipped review silently
+loses findings. The complete text is in the session transcript under
+~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer.
+Find the transcript for the session you just ran by matching its CONTENT to this PR
+(other, unrelated codex sessions write into the same tree — never pick one by
+position), and read its last assistant message in full. Where the terminal output and
+the transcript disagree, the transcript wins.
+
+## 5. Relay, and publish
+Return codex's verdict and findings as codex stated them — severities included. You
+are a wire, not an editor; drop a finding only when codex left a required field empty,
+and say so in the summary. Then publish its BLOCKER and HIGH findings as PR comments,
+each prefixed with a hidden dedupe marker
+\`<!-- anvil-finding id=${item.id}:codex:<stable-hash-of-file:line:rule> -->\`, skipping
+any whose marker is already on the PR (LEARNINGS §6). Attribute them to codex in the
+comment body so the human knows which reviewer spoke.`;
+}
+
 function fixPrompt(item, round) {
   return `You are the anvil auto-fix step (round ${round} of ${AUTO_FIX_ROUNDS}) for
 draft PR #${item.prNumber}, bd issue ${item.id}. Use Bash. Working dir: ${item.worktree}
 Never invoke the \`forge\` binary. This is the ONLY fix round — there is no second.
 
-The reviewer requested changes. Address BLOCKER and HIGH severity findings ONLY;
-leave MEDIUM and LOW for the human adjudicator. Findings:
+The reviewers requested changes. Address BLOCKER and HIGH severity findings ONLY;
+leave MEDIUM and LOW for the human adjudicator. Each finding is tagged with the
+reviewer that raised it — where both raised the same thing, that is corroboration
+across model families, so treat it as the most credible item on the list. Findings:
 ${(item.review?.findings || [])
   .filter((f) => f.severity === "BLOCKER" || f.severity === "HIGH")
-  .map((f) => `  - [${f.severity}] ${f.file ?? "?"}:${f.line ?? "?"} — ${f.message ?? ""}`)
+  .map((f) => `  - [${f.severity}] (${f.source ?? "reviewer"}) ${f.file ?? "?"}:${f.line ?? "?"} — ${f.message ?? ""}`)
   .join("\n") || "  (see the anvil-review block / PR comments)"}
 
 1. cd ${item.worktree}; make the fixes; re-run the quality commands.

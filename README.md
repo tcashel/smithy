@@ -48,7 +48,7 @@ anvil is five slash commands. Run setup once, then walk an idea through the loop
 /anvil:plan         # turn an idea (or a plan-mode plan) into a locked spec + beads issue
 /anvil:critique     # a critic panel (+ codex, when installed) and a synthesizer harden the spec
 /anvil:adjudicate   # you resolve the cruxes; decisions fold back into the spec, then it locks
-/anvil:dispatch     # headless build → quality gate → DRAFT PR → review → one auto-fix → stop
+/anvil:dispatch     # subagent build → quality gate → DRAFT PR → two reviewers → one auto-fix → stop
 ```
 
 The loop stops at a **draft PR** — you adjudicate the merge; anvil never auto-merges.
@@ -68,7 +68,7 @@ beads ships the dependency graph — **does Forge's value reassemble from bare
 parts, or does building the app still earn its keep?**
 
 `anvil` is how we find out. It reassembles Forge's loop using *only* skills,
-Workflows, subagents, `beads`, `gh`, and headless `claude` — and **never** shells
+Workflows, subagents, `beads`, `gh`, and (optionally) `codex` — and **never** shells
 out to the `forge` binary (doing so would invalidate the test). Two surfaces are
 expected to be where the answer lives:
 
