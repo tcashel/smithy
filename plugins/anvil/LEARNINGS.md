@@ -38,6 +38,12 @@ it governs **both directions**:
 Read the sidecar after the pipeline returns. The exit code is a hint; the result event
 is the verdict.
 
+**Where this still applies.** anvil's execution atom no longer spawns a CLI: the
+implementing agent is a workflow subagent that returns a validated object, so there is
+no exit code to mistrust and no stream to parse. The lesson stays because it is the
+right discipline the moment you *do* shell out to a long-running process — but the
+better first question turned out to be whether you need to spawn one at all. See §11.
+
 ## 3. A panel plus a synthesizer beats one critic — and a second model family beats a second instance
 
 One critic gives you a single opinion with no way to weigh it. The value is not more
@@ -175,3 +181,38 @@ Three rules follow, and they compose:
 The general form: an agent supervising anything longer than its own tool timeout needs
 a detached job, a durable status file, a poll loop, and a kill path. Any one of those
 missing and "don't watch" becomes "can't tell".
+
+Where it applies in anvil today: **not** the implementing agent, which stopped being a
+spawned process entirely (§11), but the `codex` legs in both the critique panel and the
+review stage. Those genuinely shell a long-running CLI, and they use exactly this
+pattern.
+
+## 11. Prefer a sanctioned subagent to a spawned CLI
+
+The implement stage originally shelled out to `claude --print
+--dangerously-skip-permissions`, and everything painful about it followed from that one
+choice. A spawned CLI is outside the session, so it needed its own permission story
+(a dangerous flag, and a safety classifier that — rightly — refused the spawn unless it
+could see a human had asked for it), its own lifetime management (detach, poll, deadline,
+kill), and its own result channel (a stream sidecar, a verdict grepped out of a log).
+Three separate live failures on drover came out of that one decision, and each fix made
+the machinery larger.
+
+A workflow `agent()` is inside the session. It is a sanctioned subagent: it inherits the
+operator's permission mode, returns a schema-validated object, and is bounded by the
+workflow runtime. Switching the implement stage to one deleted the permission flag, the
+consent relay, the detached spawn, the poll loop, the PID file, and the log-grep verdict
+— a few hundred lines of hard-won machinery replaced by an ordinary `agent()` call. It
+also made the stage resumable for free, because `agent()` results cache by (prompt, opts)
+and a log file never could.
+
+The lesson is not "wait loops are wrong" — §10 is still correct where it applies. It is
+that a whole class of hardening exists only to compensate for working outside the
+sanctioned boundary, and the cheapest fix is usually to step back inside it. When a
+workaround keeps growing, check whether the thing being worked around is load-bearing.
+
+The honest cost: isolation is now prompt-scoped rather than process-scoped. A subagent
+can pick up ambient project context (the target repo's `CLAUDE.md`) that a bare
+`claude --print` would not have seen, so §1 gets a little weaker — the spec is still the
+sole instruction, but it is no longer the only thing in the room. That is a real trade,
+and it is worth it.

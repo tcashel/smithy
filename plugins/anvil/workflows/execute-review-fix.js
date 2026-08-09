@@ -2,17 +2,18 @@
 // anvil execute-review-fix — the EXECUTION ATOM.
 //
 // "Plan. Run. Review. Ship. Don't watch." This is the Run/Review half. For
-// each bd-ready issue id passed as an arg it runs ONE headless atom:
+// each bd-ready issue id passed as an arg it runs ONE unattended atom:
 //
-//   resolve spec -> worktree -> implement (headless) -> quality gate
-//     -> DRAFT PR -> review -> ONE auto-fix round -> STOP.
+//   resolve spec -> worktree -> implement (subagent) -> quality gate
+//     -> DRAFT PR -> review (anvil-reviewer + codex) -> ONE auto-fix round -> STOP.
 //
 // It NEVER auto-merges. The atom stops at a draft PR for human adjudication
 // (LEARNINGS §4). Items flow independently through `pipeline` so one bad
 // spec doesn't sink the batch.
 //
 // NON-INVASIVE / OPERATOR-SCOPED. This workflow never shells out to the
-// `forge` binary — only `claude` (headless), `gh`, `bd`/`br`, and `git`. All
+// `forge` binary — only `gh`, `bd`/`br`, `git`, and (for the second reviewer)
+// `codex`. Every agent here is a workflow subagent, not a spawned CLI. All
 // state stays out of the target repo: beads in $BEADS_DIR (~/.anvil/beads),
 // specs in ~/.anvil/specs/<id>.md, run artifacts in ~/.anvil/runs/<id>/.
 // Worktrees are disposable and need NO committed-in file of their own.
@@ -37,7 +38,7 @@
 export const meta = {
   name: "execute-review-fix",
   description:
-    "anvil execution atom: for each bd-ready issue, implement its spec in a disposable worktree headlessly, gate quality, open a DRAFT PR, review it, run one auto-fix round, then stop. Never merges.",
+    "anvil execution atom: for each bd-ready issue, a subagent implements its spec in a disposable worktree, then the atom gates quality, opens a DRAFT PR, reviews it (anvil-reviewer plus codex when installed), runs one auto-fix round, and stops. Never merges.",
   phases: [
     { title: "resolve" }, { title: "implement" }, { title: "quality" },
     { title: "pr" }, { title: "review" }, { title: "fix" },
@@ -48,214 +49,31 @@ export const meta = {
 // Never a second round, never a merge (LEARNINGS §4).
 const AUTO_FIX_ROUNDS = 1;
 
-// ── Builder permission mode ───────────────────────────────────────────────────
-// The implement stage spawns a headless `claude` builder. Two modes, selected by
-// the `builderPermissions` arg (see normalizeArgs / parseBuilderPermissions):
+// ── The implementing agent is a SUBAGENT, not a spawned CLI ───────────────────
+// This stage used to shell out to `claude --print --dangerously-skip-permissions`
+// and then supervise it: a stream sidecar, a verdict grepped out of a log, a
+// detached process, a wait loop, a PID to kill. Every piece of that existed to
+// work around one fact — a spawned CLI is OUTSIDE the session, so it needed its
+// own permissions, its own lifetime, and its own result channel.
 //
-//   "skip"    DEFAULT, and the historical behavior. The builder is spawned with
-//             --dangerously-skip-permissions, which is the only way an unattended
-//             run can edit files, run the quality gate, and commit — nobody is
-//             watching to answer a prompt. Claude Code's safety classifier will
-//             REFUSE this spawn unless the operator explicitly approved
-//             permission-skipping; /anvil:dispatch confirms that consent BEFORE
-//             invoking this workflow.
-//   "inherit" The flag is omitted and the builder runs under whatever permissions
-//             the environment already grants. TRADEOFF: a headless run cannot
-//             answer a permission prompt, so every gated action fails outright
-//             unless the environment pre-authorized it. Suited to sandboxes,
-//             containers, and pre-authorized settings — where the ENVIRONMENT,
-//             not a human at a keyboard, is the thing granting permission.
-
-// ── How the implement stage waits ─────────────────────────────────────────────
-// A build is a LONG job: tens of minutes is ordinary. The supervising agent's
-// Bash tool caps a SINGLE call at 600s, so waiting for the builder in one
-// foreground command is a structural bug, not a tuning problem. Observed on
-// drover run wf_e55e6310-302: the agent spawned the builder, then waited with a
-// single `until grep ...; do sleep 10; done`. That call hit the cap and was
-// moved to the background, which left the agent unable to see — and so unable to
-// truthfully report — the result. It correctly refused to invent one, the
-// pipeline recorded null, and the detached builder was reaped with the process
-// tree ~14 minutes in, having done nothing but `bun add`.
+// A workflow `agent()` is inside the session. It is a sanctioned subagent: it
+// inherits the operator's permission mode, returns a validated object, and is
+// bounded by the workflow runtime rather than by a shell. So the apparatus is
+// deleted rather than hardened — no permission flag, no consent relay, no spawn,
+// no poll, no orphan to reap. If the session's mode calls for a permission prompt,
+// the operator gets one; that is the intended behavior, not something to route
+// around.
 //
-// So: SPAWN the builder detached, then wait with a SEQUENCE of bounded polls,
-// each its own tool call, each comfortably under the cap. The loop is what
-// waits; no single call ever does. The agent's turn stays alive throughout.
-const IMPLEMENT_POLL_SECONDS = 280;      // one bounded wait, one tool call
-const IMPLEMENT_DEADLINE_MINUTES = 90;   // overall ceiling; then kill, don't orphan
-
-// ── Bash recipe shared across atoms ───────────────────────────────────────────
-// These string constants are embedded verbatim into the implementing agent's
-// prompt so the agent runs the EXACT real stream-json invocation Forge uses
-// (mirrors claudeJobCommand + claudeJobStreamFilter in
-// src/core/agents/index.ts), and judges success by the terminal result event
-// in the sidecar — NOT the pipeline exit code (LEARNINGS §2 / PR #64).
-
-// Projects ONLY the final {"type":"result"} event's text to stdout, exactly
-// like Forge's claudeJobStreamFilter. Kept on one line so it drops cleanly
-// into a single-quoted heredoc in the agent's shell.
-const CLAUDE_STREAM_FILTER =
-  `node -e "const rl=require('readline').createInterface({input:process.stdin});` +
-  `rl.on('line',l=>{try{const e=JSON.parse(l);` +
-  `if(e.type==='result'&&typeof e.result==='string')process.stdout.write(e.result+String.fromCharCode(10))}catch{}})"`;
-
-// The headless implementing-agent recipe. {{...}} placeholders are filled per
-// item. The agent writes this to a script file and SPAWNS it detached (see
-// SPAWN_RECIPE); it is never run in the foreground.
+// It also makes implement RESUMABLE for free: `agent()` results cache by
+// (prompt, opts), so a run resumed with resumeFromRunId replays a finished build
+// instead of rebuilding it. The spawned-CLI version never could — its result
+// lived in a log file the runtime knew nothing about.
 //
-// The pipeline, under `set -uo pipefail`:
-//   claude --print --output-format stream-json --verbose
-//          [--dangerously-skip-permissions] --model <m> < promptFile
-//     | tee sidecar | <filter>
-//
-// {{PERMISSION_FLAG}} is " --dangerously-skip-permissions" in the default "skip"
-// mode and EMPTY in "inherit" mode, so the default substitution reproduces the
-// invocation byte for byte.
-//
-// CRUCIAL (PR #64): pipefail makes the pipeline exit code unreliable — a
-// downstream filter or SIGPIPE can mask a real success, and a truncated stream
-// can masquerade as success. So success is decided ENTIRELY by the LAST
-// {"type":"result"} line in the sidecar:
-//   * RESCUE a non-zero exit when that line exists, is_error is not true, the
-//     stop_reason is on the allowlist (end_turn|tool_use|stop_sequence), and
-//     the agent left a well-formed final fenced block / clean tree.
-//   * FORCE-FAIL a zero exit when no valid terminal result line is present.
-const IMPLEMENT_RECIPE = `set -uo pipefail
-export PYTHONUTF8=1
-export LANG="\${LANG:-en_US.UTF-8}"
-
-# Force-fresh sidecar so a stale prior result can never be mistaken for this run.
-: > "{{SIDECAR}}"
-
-claude --print --output-format stream-json --verbose{{PERMISSION_FLAG}} \\
-  --model "{{MODEL}}" < "{{PROMPT_FILE}}" \\
-  | tee "{{SIDECAR}}" \\
-  | ${CLAUDE_STREAM_FILTER}
-PIPE_EXIT=$?   # UNRELIABLE under pipefail — do NOT trust this alone.
-
-# ── Trust the terminal result event, not the exit code (PR #64) ──────────────
-# Evaluate ONLY the last "type":"result" line. A mid-stream tool_result with
-# is_error:true (e.g. a read-only grep that matched nothing) must not count.
-RESULT_LINE=$(grep '"type":"result"' "{{SIDECAR}}" | tail -1)
-RESULT_OK=1
-if [ -z "$RESULT_LINE" ]; then
-  RESULT_OK=0
-elif printf '%s' "$RESULT_LINE" | grep -q '"is_error":true'; then
-  RESULT_OK=0
-else
-  # stop_reason allowlist, fail closed. Absent/null stop_reason is allowed;
-  # max_tokens / error / unknown future stops (refusal, pause_turn, ...) fail.
-  STOP=$(printf '%s' "$RESULT_LINE" | grep -o '"stop_reason":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')
-  if [ -n "$STOP" ]; then
-    case "$STOP" in
-      end_turn|tool_use|stop_sequence) ;;
-      *) RESULT_OK=0 ;;
-    esac
-  fi
-fi
-
-# The agent must also have COMMITTED work: a draft PR with zero commits is a
-# silent failure. Mirror Forge's "commits ahead of base" gate.
-COMMITS_AHEAD=$(git -C "{{WORKTREE}}" rev-list --count "{{BASE_REF}}..HEAD" 2>/dev/null || echo 0)
-
-# The verdict gets its OWN file, not just stdout: the builder's transcript also
-# lands in the run log, and a spec that happens to quote "IMPLEMENT_OK" must not
-# be mistaken for a verdict by the poller.
-if [ "$RESULT_OK" -eq 1 ] && [ "$COMMITS_AHEAD" -gt 0 ]; then
-  # RESCUE path: valid terminal result wins even if PIPE_EXIT != 0.
-  echo "IMPLEMENT_OK pipe_exit=$PIPE_EXIT commits=$COMMITS_AHEAD" | tee "{{STATUS_FILE}}"
-  exit 0
-fi
-# FORCE-FAIL path: invalid/absent terminal result, or nothing committed, even
-# if PIPE_EXIT == 0.
-echo "IMPLEMENT_FAIL pipe_exit=$PIPE_EXIT result_ok=$RESULT_OK commits=$COMMITS_AHEAD" | tee "{{STATUS_FILE}}"
-exit 1`;
-
-// ── Spawn: detached, survivable, and pinned to a PID we can kill ──────────────
-// nohup alone only survives a HANGUP; the drover builder died to a process-group
-// kill aimed at the supervising shell, which nohup does not stop. What stops it
-// is a new SESSION: setsid on Linux, and — since macOS ships no setsid, and macOS
-// is where this failed — a three-line python3 equivalent. Plain nohup is the last
-// resort, honest about being the weakest of the three. Stale status/pid files are
-// cleared first, mirroring the recipe's force-fresh sidecar: a resumed atom must
-// never read a previous attempt's verdict as this one's.
-const SPAWN_RECIPE = `set -uo pipefail
-RUN_DIR="{{RUN_DIR}}"
-SCRIPT="$RUN_DIR/implement.sh"
-RUN_LOG="$RUN_DIR/implement.log"
-STATUS_FILE="$RUN_DIR/implement.status"
-PID_FILE="$RUN_DIR/implement.pid"
-
-rm -f "$STATUS_FILE" "$PID_FILE"
-: > "$RUN_LOG"
-chmod +x "$SCRIPT"
-
-if command -v setsid >/dev/null 2>&1; then
-  setsid nohup bash "$SCRIPT" > "$RUN_LOG" 2>&1 < /dev/null &
-elif command -v python3 >/dev/null 2>&1; then
-  nohup python3 -c 'import os, sys
-try:
-    os.setsid()
-except OSError:
-    pass
-os.execvp("bash", ["bash", sys.argv[1]])' "$SCRIPT" > "$RUN_LOG" 2>&1 < /dev/null &
-else
-  nohup bash "$SCRIPT" > "$RUN_LOG" 2>&1 < /dev/null &
-fi
-BUILDER_PID=$!
-disown "$BUILDER_PID" 2>/dev/null || true
-echo "$BUILDER_PID" > "$PID_FILE"
-echo "SPAWNED builder_pid=$BUILDER_PID status=$STATUS_FILE log=$RUN_LOG"`;
-
-// ── Poll: ONE bounded wait, meant to be run again and again ──────────────────
-// Returns in ~{{POLL_SECONDS}}s no matter what, then prints enough progress that
-// the next iteration is an informed decision rather than a blind repeat.
-const POLL_RECIPE = `RUN_DIR="{{RUN_DIR}}"
-STATUS_FILE="$RUN_DIR/implement.status"
-RUN_LOG="$RUN_DIR/implement.log"
-PID_FILE="$RUN_DIR/implement.pid"
-SIDECAR="$RUN_DIR/agent.stream.jsonl"
-BUILDER_PID="$(cat "$PID_FILE" 2>/dev/null || echo)"
-
-WAITED=0
-while [ "$WAITED" -lt {{POLL_SECONDS}} ]; do
-  if grep -qE 'IMPLEMENT_(OK|FAIL)' "$STATUS_FILE" 2>/dev/null; then break; fi
-  if [ -n "$BUILDER_PID" ] && ! kill -0 "$BUILDER_PID" 2>/dev/null; then
-    echo "BUILDER_GONE — the process exited without writing a verdict"
-    break
-  fi
-  sleep 10
-  WAITED=$((WAITED + 10))
-done
-
-# The sidecar may not exist on the first poll — the builder truncates it a moment
-# after spawn. Test before reading it, or the shell's own redirect error leaks
-# into the output the supervisor is trying to read.
-if [ -f "$SIDECAR" ]; then EVENTS="$(wc -l < "$SIDECAR" | tr -d ' ')"; else EVENTS=0; fi
-echo "verdict=$(cat "$STATUS_FILE" 2>/dev/null || echo none)"
-echo "stream_events=$EVENTS"
-echo "commits_ahead=$(git -C "{{WORKTREE}}" rev-list --count "{{BASE_REF}}..HEAD" 2>/dev/null || echo 0)"
-git -C "{{WORKTREE}}" status --short 2>/dev/null | head -20
-tail -3 "$RUN_LOG" 2>/dev/null
-
-# The poll REPORTS; it never signals. Exit 0 so a missing log or an empty tree on
-# an early poll can't be read as "the poll failed".
-exit 0`;
-
-// ── Abort: kill the tree, leave nothing orphaned ─────────────────────────────
-// Children first, then the launcher, so nothing is re-parented and left running.
-// An orphaned builder burns tokens in a worktree no one is watching — worse than
-// an honest failure.
-const ABORT_RECIPE = `RUN_DIR="{{RUN_DIR}}"
-PID_FILE="$RUN_DIR/implement.pid"
-BUILDER_PID="$(cat "$PID_FILE" 2>/dev/null || echo)"
-if [ -n "$BUILDER_PID" ]; then
-  pkill -P "$BUILDER_PID" 2>/dev/null || true
-  kill "$BUILDER_PID" 2>/dev/null || true
-  sleep 3
-  pkill -9 -P "$BUILDER_PID" 2>/dev/null || true
-  kill -9 "$BUILDER_PID" 2>/dev/null || true
-fi
-echo "ABORTED builder_pid=\${BUILDER_PID:-none} — nothing left running"`;
+// One honest caveat against LEARNINGS §1: isolation is now PROMPT-scoped, not
+// PROCESS-scoped. A subagent can pick up ambient project context (the target
+// repo's CLAUDE.md) that a bare `claude --print` would not have seen. The spec is
+// still the sole INSTRUCTION and must still stand on its own — a vague spec is no
+// safer here than it was before.
 
 // ── Structured-return schemas ─────────────────────────────────────────────────
 // DECLARED BEFORE the workflow body on purpose: the body executes at top level,
@@ -286,10 +104,8 @@ const implementSchema = {
   properties: {
     implemented: { type: "boolean" },
     commitsAhead: { type: "integer" },
-    stopReason: { type: "string" },
-    timedOut: { type: "boolean", description: "True when the builder was killed at the deadline without a verdict — distinct from a builder that ran and failed." },
-    builderPid: { type: "integer", description: "PID of the detached builder, so a stuck run can be traced or killed by hand." },
-    pollCount: { type: "integer", description: "How many bounded polls the supervisor ran before it had a verdict." },
+    summary: { type: "string", description: "2-4 sentences on what actually changed." },
+    gateOutput: { type: "string", description: "The quality gate's final state as the builder saw it, pass or fail." },
     note: { type: "string" },
   },
 };
@@ -380,21 +196,12 @@ with citations), ## What I Verified, ## What I Skipped. Emit nothing after the b
 const stage = (title, fn) => fn;
 
 {
-  const parsedArgs = normalizeArgs(args);
-  const ids = parseIds(parsedArgs);
-  const implementOptions = parseImplementOptions(parsedArgs);
-  const builderPermissions = implementOptions.builderPermissions;
+  const ids = parseIds(args);
   if (ids.length === 0) {
-    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...], or the object form {\"ids\":[\"<id>\"],\"builderPermissions\":\"skip\"|\"inherit\"}");
+    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...]");
     return { atoms: [] };
   }
   log(`execute-review-fix: ${ids.length} issue(s): ${ids.join(", ")}`);
-  if (builderPermissions !== "skip") {
-    log(`builder permission mode: ${builderPermissions} — the headless builder omits --dangerously-skip-permissions and will FAIL on any action this environment has not already authorized.`);
-  } else if (!implementOptions.operatorAuthorized) {
-    log("no operatorAuthorizedSkipPermissions flag — the builder spawn may be refused by the safety classifier, which cannot see consent given in the parent session. /anvil:dispatch sets this after confirming with the operator.");
-  }
-  log(`implement deadline: ~${implementOptions.deadlineMinutes} min per build, waited out in ${Math.ceil((implementOptions.deadlineMinutes * 60) / IMPLEMENT_POLL_SECONDS)} bounded polls.`);
 
   // Each item is one atom. `pipeline` runs items independently so a confused
   // agent on one spec (LEARNINGS §1) doesn't abort the rest of the batch.
@@ -412,12 +219,12 @@ const stage = (title, fn) => fn;
       return { ...item, ...r };
     }),
 
-    // ── Stage 2: implement headlessly (the PR #64 result-trust recipe) ───────
+    // ── Stage 2: implement — a subagent builds it in the worktree ────────────
     stage("implement", async (item) => {
       if (item.ready === false) {
         return { ...item, status: "skipped", note: item.note ?? "spec not resolvable" };
       }
-      const r = await agent(implementPrompt(item, implementOptions), {
+      const r = await agent(implementPrompt(item), {
         schema: implementSchema,
         phase: "implement",
         label: `implement:${item.id}`,
@@ -429,7 +236,7 @@ const stage = (title, fn) => fn;
     // ── Stage 3: quality gate ────────────────────────────────────────────────
     stage("quality", async (item) => {
       if (item.status === "skipped" || item.implemented === false) {
-        return { ...item, status: item.status ?? implementFailureStatus(item) };
+        return { ...item, status: item.status ?? "implement-failed" };
       }
       const r = await agent(qualityPrompt(item), {
         schema: qualitySchema,
@@ -499,7 +306,7 @@ const stage = (title, fn) => fn;
   for (const a of (atoms || []).filter(Boolean)) {
     log(`  ${a.id}: status=${a.status ?? "unknown"} pr=${a.prUrl ?? "—"} verdict=${a.review?.verdict ?? "—"}`);
   }
-  return { builderPermissions, atoms };
+  return { atoms };
 }
 
 // ── Review helper: prefer the anvil-reviewer subagent, degrade gracefully ─────
@@ -557,118 +364,42 @@ Report the resolved values. Set ready=false with a note if the spec file is
 missing, empty, or the repo path can't be resolved.`;
 }
 
-// ── Stage 2: implement (headless, detached, result-event-trusted) ─────────────
-function implementPrompt(item, options) {
-  const runDir = `$HOME/.anvil/runs/${item.id}`;
-  const worktree = item.worktree || `${runDir}/worktree`;
-  const baseRef = item.baseRef || "origin/main";
-  const permissionFlag = options.builderPermissions === "inherit" ? "" : " --dangerously-skip-permissions";
 
-  // Common substitutions for every fragment the agent runs.
-  const fill = (s) =>
-    s.replaceAll("{{RUN_DIR}}", runDir)
-      .replaceAll("{{WORKTREE}}", worktree)
-      .replaceAll("{{BASE_REF}}", baseRef)
-      .replaceAll("{{POLL_SECONDS}}", String(IMPLEMENT_POLL_SECONDS));
+// ── Stage 2: implement — a sanctioned subagent working in the worktree ───────
+function implementPrompt(item) {
+  const gate = item.qualityCommands && item.qualityCommands.length
+    ? item.qualityCommands.map((c) => `     - \`${c}\``).join("\n")
+    : "     - (the spec lists none — find the repo's own lint/typecheck/test and run those)";
 
-  const recipe = fill(
-    IMPLEMENT_RECIPE.replaceAll("{{PERMISSION_FLAG}}", permissionFlag)
-      .replaceAll("{{SIDECAR}}", `${runDir}/agent.stream.jsonl`)
-      .replaceAll("{{PROMPT_FILE}}", `${runDir}/agent-prompt.txt`)
-      .replaceAll("{{STATUS_FILE}}", `${runDir}/implement.status`)
-      .replaceAll("{{MODEL}}", "${ANVIL_IMPLEMENT_MODEL:-claude-sonnet-4-6}"),
-  );
-  const spawn = fill(SPAWN_RECIPE);
-  const poll = fill(POLL_RECIPE);
-  const abort = fill(ABORT_RECIPE);
-  const maxPolls = Math.ceil((options.deadlineMinutes * 60) / IMPLEMENT_POLL_SECONDS);
+  return `You are the anvil implementing agent for bd issue ${item.id}. You do the work
+yourself — there is no other builder behind you.
 
-  // The classifier that guards `--dangerously-skip-permissions` evaluates the
-  // spawn from THIS agent's context, which does not include the parent session
-  // where the operator gave consent. So when /anvil:dispatch has confirmed that
-  // consent, say so here, in plain language, where the decision is made.
-  const consent =
-    options.operatorAuthorized && options.builderPermissions !== "inherit"
-      ? `AUTHORIZED BY THE OPERATOR: the operator explicitly authorized this builder to run
-with --dangerously-skip-permissions${options.authorizationNote ? ` (${options.authorizationNote})` : ""}. /anvil:dispatch confirmed that with them
-before this workflow started; it is not an assumption you or I are making. The
-builder runs inside the disposable worktree ${worktree}, outside the
-target repo's own checkout.
+WORKING DIRECTORY (everything happens here, and nowhere else):
+  ${item.worktree}
+BRANCH: ${item.branch}
+SPEC:   ${item.specPath}
 
-`
-      : "";
-
-  return `You are the anvil implement step for bd issue ${item.id}. Use Bash.
-You SUPERVISE a headless claude run — you do not implement the code yourself.
-
-${consent}NON-NEGOTIABLE: never invoke the \`forge\` binary. Only claude/gh/bd/git.
-
-WORKTREE: ${item.worktree}
-SPEC FILE (the SOLE input the implementing agent may see): ${item.specPath}
-
-1. Build the implementing agent's prompt file. The implementing agent must see
-   ONLY the spec body — not this conversation, not the repo's CLAUDE.md, nothing
-   else (LEARNINGS §1). Write to ${runDir}/agent-prompt.txt:
-     - A one-line role header: working dir is the worktree, branch is ${item.branch}.
-     - The VERBATIM contents of ${item.specPath}.
-     - Instructions: implement the spec; the agent OWNS its commits — use
-       \`git add <path>\` on intentionally-changed files only (never \`git add -A\`);
-       use conventional commits; do NOT push or open a PR (anvil does that);
-       exit 0 only when complete and committed.
-2. cd into the worktree: ${item.worktree}
-3. Write this EXACT script to ${runDir}/implement.sh. It mirrors Forge's
-   stream-json command and decides success from the terminal result event in the
-   sidecar, NOT the pipe exit — the PR #64 fix; do not "simplify" it to
-   \`if claude ...; then\`:
-
-\`\`\`bash
-${recipe}
-\`\`\`
-
-4. SPAWN it detached, then come straight back. Do NOT run it in the foreground.
-   A build routinely outlives your Bash tool's 600s per-call cap; a foreground
-   wait gets pushed to the background, taking the result with it, and the
-   builder is reaped along with the process tree. That is the exact failure this
-   step is written to avoid.
-
-\`\`\`bash
-${spawn}
-\`\`\`
-
-   Record the builder_pid it prints — you will need it to report, and to kill.
-
-5. WAIT IN A LOOP, across MANY tool calls. Run the poll below, read what it
-   printed, then run it again. Each call is self-bounding (~${IMPLEMENT_POLL_SECONDS}s) so it always
-   returns inside the cap; the LOOP is what waits, never a single call. Repeat up
-   to ${maxPolls} times, which is roughly ${options.deadlineMinutes} minutes of build time.
-
-\`\`\`bash
-${poll}
-\`\`\`
-
-   Read the progress between polls instead of repeating blindly: a rising
-   stream_events count means the builder is working, a rising commits_ahead means
-   it is landing work, and BUILDER_GONE means it died without a verdict (report
-   implemented=false and say so). Stop the moment verdict= shows IMPLEMENT_OK or
-   IMPLEMENT_FAIL.
-
-   NEVER end your turn while the builder is still running. An unfinished build is
-   not a result you may report — and do not invent one. If you genuinely cannot
-   determine the outcome, say exactly that in \`note\` and report
-   implemented=false.
-
-6. If you reach ${maxPolls} polls with no verdict, KILL the builder before you report.
-   An orphan burning tokens in a worktree nobody is watching is worse than an
-   honest failure. Then report implemented=false with timedOut=true:
-
-\`\`\`bash
-${abort}
-\`\`\`
-
-7. Report implemented=true ONLY if the verdict line says IMPLEMENT_OK. If it says
-   IMPLEMENT_FAIL, report implemented=false with the reason (no valid terminal
-   result, disallowed stop_reason, or no commits). Include commitsAhead from the
-   verdict line, the builderPid, and how many polls you ran (pollCount).`;
+1. Read ${item.specPath} in full, first. It is your SOLE source of requirements:
+   build what it says rather than what you would have designed. Where the spec is
+   silent, take the smallest choice consistent with the surrounding code — silence is
+   not an invitation to widen the scope.
+2. Implement it inside the worktree above. That worktree is disposable and sits
+   outside the operator's own checkout; never edit the main checkout, and never invoke
+   the \`forge\` binary (git, gh and bd are the only tools anvil uses).
+3. Run the quality gate BEFORE your first commit, so you know what was already broken,
+   and again after your last one:
+${gate}
+   Fix whatever YOUR change broke. A failure that was already there is a line in your
+   report, not a licence to go fixing unrelated code.
+4. Own your commits: \`git add <path>\` on files you changed on purpose (never
+   \`git add -A\`), conventional-commit messages, committed as you go. Do NOT push, do
+   NOT open a PR, do NOT merge — anvil does all three after you return.
+5. Report honestly. implemented=true only if the spec is actually built AND committed —
+   check \`git -C ${item.worktree} rev-list --count ${item.baseRef || "origin/main"}..HEAD\`
+   and put that number in commitsAhead. If you could not finish, say so with
+   implemented=false and the reason in note: a half-built worktree reported as done
+   costs the reviewer far more than an honest failure does. Put the gate's final state
+   in gateOutput, and 2-4 sentences on what you changed in summary.`;
 }
 
 // ── Stage 3: quality gate ─────────────────────────────────────────────────────
@@ -758,54 +489,10 @@ ${(item.review?.findings || [])
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// args arrives in one of three shapes: the historical space/comma-separated id
-// string ("bd-a1b2 bd-c3d4"), an array of ids, or the object form
-// { ids: [...], builderPermissions: "skip" | "inherit" }. The Workflow tool may
-// hand that object through as a JSON string, so parse that too. A bd id can
-// never start with "{", so the historical string form is untouched.
-function normalizeArgs(args) {
-  if (typeof args === "string" && args.trim().startsWith("{")) {
-    try {
-      return JSON.parse(args);
-    } catch (e) { /* not JSON after all — fall through and treat it as an id string */ }
-  }
-  return args;
-}
-
-// Default "skip" — the historical behavior. An unrecognized value also falls back
-// to "skip": a typo must not silently strand the builder on permission prompts
-// that no one is there to answer.
-function parseBuilderPermissions(args) {
-  if (args && typeof args === "object" && !Array.isArray(args) && args.builderPermissions) {
-    return String(args.builderPermissions).trim().toLowerCase() === "inherit" ? "inherit" : "skip";
-  }
-  return "skip";
-}
-
-// Everything the implement stage needs beyond the item itself.
-//
-// operatorAuthorizedSkipPermissions is a RELAY of a real human decision, not a
-// setting: /anvil:dispatch sets it only after confirming with the operator, and
-// it exists because the classifier that guards the spawn evaluates it inside the
-// subagent, where the parent session's conversation is not visible. It defaults
-// to false — an unset flag means "nobody asked", which is exactly what should
-// block. operatorAuthorizationNote is the citation (who, when) that gets quoted
-// into the implement prompt.
-function parseImplementOptions(args) {
-  const o = args && typeof args === "object" && !Array.isArray(args) ? args : {};
-  const raw = Number(o.implementDeadlineMinutes);
-  // Clamp: below ~5 minutes no real build finishes, and past 8 hours a stuck
-  // builder is being babysat by nobody.
-  const deadlineMinutes =
-    Number.isFinite(raw) && raw > 0 ? Math.min(Math.max(Math.round(raw), 5), 480) : IMPLEMENT_DEADLINE_MINUTES;
-  return {
-    builderPermissions: parseBuilderPermissions(args),
-    operatorAuthorized: o.operatorAuthorizedSkipPermissions === true,
-    authorizationNote: o.operatorAuthorizationNote ? String(o.operatorAuthorizationNote).trim() : "",
-    deadlineMinutes,
-  };
-}
-
+// args: a space/comma-separated id string ("bd-a1b2 bd-c3d4"), an array of ids,
+// or { ids: [...] }. There is nothing else to configure — the builder is a
+// subagent now, so there is no permission mode, no consent flag, and no build
+// deadline to pass through.
 function parseIds(args) {
   if (Array.isArray(args)) return args.map(String).map((s) => s.trim()).filter(Boolean);
   if (typeof args === "string") return args.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -821,16 +508,9 @@ function parseIds(args) {
 function finalize(item) {
   let status = item.status;
   if (!status) {
-    if (item.implemented === false) status = implementFailureStatus(item);
+    if (item.implemented === false) status = "implement-failed";
     else if (!item.prNumber) status = "no-pr";
     else status = "draft-pr-ready-for-adjudication";
   }
   return { ...item, status };
-}
-
-// A builder killed at the deadline is a different problem from one that ran and
-// failed: the first says the job was too big (or wedged), the second says the
-// work is wrong. The operator needs to tell them apart.
-function implementFailureStatus(item) {
-  return item.timedOut ? "implement-timed-out" : "implement-failed";
 }

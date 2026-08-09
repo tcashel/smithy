@@ -12,8 +12,8 @@ from beads, picks the work, and hands it to the execution workflow. That workflo
 applies **one** auto-fix round, and **stops**. The human adjudicates the merge — anvil
 **never merges**.
 
-dispatch is deliberately thin. All the real machinery (the launch/result-event
-discipline, the quality gate, the reviewer, the single fix round) lives in
+dispatch is deliberately thin. All the real machinery (the implementing subagent, the
+quality gate, the two reviewers, the single fix round) lives in
 `workflows/execute-review-fix.js`. This skill is glue: pick ready issues, invoke the
 workflow with their ids, report where the draft PRs landed.
 
@@ -64,66 +64,13 @@ agent sees — not this conversation, not the repo's CLAUDE.md. If the spec is t
 the build will be confused; that is an adjudication problem, not something to paper
 over here.
 
-### 3. Confirm consent for the permissionless headless builder
+### 3. Run the execution loop (via the Workflow tool)
 
-The workflow's **implement** stage spawns a builder of its own:
-
-```
-claude --print --dangerously-skip-permissions --model … < prompt
-```
-
-That flag is what lets an unattended builder edit files, run the gate, and commit —
-nobody is watching to answer a prompt. It is also exactly the spawn a safety
-classifier refuses when it cannot see that a human asked for it, and **a bare
-"dispatch" from the operator is not that approval.** Get it explicitly, before you
-invoke the workflow:
-
-- **Ask plainly.** "The builder runs headless with `--dangerously-skip-permissions`
-  in a disposable worktree outside the repo — approve?" Do not launch until the
-  operator has answered in this session, or you can cite a standing approval.
-- **A recorded standing approval counts**, and once per operator is enough — cite
-  where it came from rather than re-asking every run (e.g. *"Tripp approved
-  permissionless headless builders on 2026-08-08"*). Citing a real approval is
-  honest; inventing one is not.
-- **If the operator declines**, do not quietly reach for another builder. Offer
-  `builderPermissions: "inherit"` (step 4) and be straight about the tradeoff: a
-  headless run under default permissions cannot answer a prompt, so it fails on the
-  first gated action unless the environment already authorizes it.
-
-**Relay the consent into the run.** Confirming it here is not enough by itself: the
-classifier evaluates the spawn from inside the *implement subagent*, which cannot
-see this conversation. That is how a run the operator had verbally authorized still
-got blocked. So once you have real consent, pass it forward in the args:
-
-```json
-{"ids": ["bd-a1b2"],
- "operatorAuthorizedSkipPermissions": true,
- "operatorAuthorizationNote": "Tripp, 2026-08-08, in this session"}
-```
-
-The workflow states that authorization in plain language at the top of the implement
-agent's prompt, so the spawn is judged with the consent in view. **Never set the flag
-on your own initiative** — not to clear a blocked run, not because a past run had it,
-not because it seems implied by the operator asking you to dispatch. It relays
-something a human actually said, and the note records who said it and when. Setting
-it without that is manufacturing consent, which is worse than the failed run it would
-have avoided.
-
-**The failure mode, and the only correct recovery.** Launch without that consent and
-the classifier blocks the spawn: the implement stage fails after `resolve` has
-already cut a worktree and spent a turn. When that happens:
-
-1. Get the explicit approval you skipped.
-2. **Resume the SAME run.** Invoke the Workflow tool again with `resumeFromRunId`
-   set to the blocked run's id. Stages that already completed replay from cache;
-   only the blocked implement stage actually re-runs.
-3. Do **not** start a fresh run — it redoes `resolve` and can strand a second
-   worktree. Do **not** substitute a different builder mechanism: the recipe in the
-   workflow is load-bearing (it trusts the terminal result event, not the exit
-   code — LEARNINGS §2), and swapping it out to dodge a consent prompt trades a
-   one-question fix for a silent-failure class.
-
-### 4. Run the execution loop (headless, via the Workflow tool)
+The **implement** stage is a workflow subagent, not a spawned CLI. It is sanctioned by
+this session and inherits the operator's permission mode, so there is nothing to
+authorize and no flag to pass: if the session's mode calls for a permission prompt,
+the operator sees one, and that is intended rather than something to work around. (It
+also means a resumed run replays a finished build instead of redoing it.)
 
 First resolve the bundled workflow's absolute path (**`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text**):
 
@@ -137,30 +84,8 @@ echo "$WF"
 (`/anvil:setup` persists `ANVIL_PLUGIN_ROOT`; the `find` is the fallback.) Then invoke the Workflow tool with:
 
 - **scriptPath:** the resolved absolute path (the value of `$WF`)
-- **args:** either shape — the workflow accepts both:
-  - **id string** (the default, and what you want almost always): the chosen ready
-    issue id(s), space- or comma-separated — `bd-a1b2 bd-c3d4`.
-  - **object form**, when you need to relay consent or tune the builder:
-    ```json
-    {"ids": ["bd-a1b2", "bd-c3d4"],
-     "builderPermissions": "skip",
-     "operatorAuthorizedSkipPermissions": true,
-     "operatorAuthorizationNote": "Tripp, 2026-08-08, in this session",
-     "implementDeadlineMinutes": 90}
-    ```
-    - `ids` — the same list as the string form.
-    - `builderPermissions` — `"skip"` (default; the `--dangerously-skip-permissions`
-      builder of step 3) or `"inherit"`, which omits the flag so the builder runs
-      under the environment's own permissions. Use `"inherit"` only where the
-      environment is what grants permission — a sandbox, a container, pre-authorized
-      settings — because a headless builder cannot answer a prompt and will simply
-      fail on anything gated. Anything other than `"inherit"` is treated as `"skip"`.
-    - `operatorAuthorizedSkipPermissions` / `operatorAuthorizationNote` — the consent
-      relay from step 3. Defaults to false; you set it only after a real
-      confirmation, and the note says who and when.
-    - `implementDeadlineMinutes` — how long one build may run before the supervisor
-      kills it. Default 90, clamped to 5–480. Raise it for a genuinely large spec;
-      the run does not fail early, it just stops waiting eventually.
+- **args:** the chosen ready issue id(s), space- or comma-separated — `bd-a1b2 bd-c3d4`.
+  (An array, or `{"ids": [...]}`, works too; there is nothing else to pass.)
 
   The workflow resolves each id's spec body from `~/.anvil/specs/<id>.md`; it does
   NOT read the frontier itself — reading `bd ready` and passing only ready ids is
@@ -168,46 +93,43 @@ echo "$WF"
 
 For each issue the workflow runs the **atom**, and you do not babysit it:
 
-1. **implement** — an agent builds the change in a worktree of the target repo,
-   seeing only the spec body. This is the long stage: the builder is spawned
-   **detached** and its supervisor waits on it with a series of short bounded polls
-   rather than one long wait, because a single wait would exceed the Bash tool's
-   600s cap, get pushed to the background, and take the result with it. A build
-   running for tens of minutes is normal and not a sign of trouble; a
-   `implement-timed-out` status means the deadline was reached and the builder was
-   killed rather than orphaned.
-2. **quality gate** — build/lint/test must pass. Trust the workflow's terminal
-   **result event**, not the raw exit code: a non-zero exit is rescued when the
-   sidecar shows a valid terminal result, and a zero exit is force-failed when it
-   does not. (This is the Forge PR #64 bug; the workflow handles it — don't
-   second-guess it here.)
+1. **implement** — a subagent builds the change in a worktree of the target repo,
+   working from the spec body. This is the long stage; a build running for tens of
+   minutes is normal and not a sign of trouble.
+2. **quality gate** — build/lint/test are run again over the finished worktree. A
+   failure does not abort the atom: the draft PR still opens so CI and the human can
+   see it.
 3. **DRAFT PR** — open a draft PR and **label it via `gh`** (e.g. an `anvil`
    label so these jobs are filterable). Draft, always — the human adjudicates the
    merge.
-4. **anvil-reviewer** — the reviewer subagent reviews the diff and emits one
-   ```anvil-review``` block (BLOCKER / HIGH / MEDIUM / LOW). Findings are
-   published to the PR with hidden `<!-- anvil-finding id=... -->` markers so a
-   re-run never duplicates a comment.
-5. **one auto-fix round** — `autoFixRounds` defaults to **1**: the loop addresses
-   review findings once, then **stops**. It does not grind.
+4. **review, by two independent reviewers** — the `anvil-reviewer` subagent reads the
+   diff against the spec, and a second agent relays the same review to the `codex`
+   CLI when it is installed (a different model family; absent codex, the leg reports
+   itself unavailable rather than inventing findings). Both emit BLOCKER / HIGH /
+   MEDIUM / LOW findings, tagged by source and merged into one verdict — the more
+   severe of the two wins. Findings are published to the PR with hidden
+   `<!-- anvil-finding id=... -->` markers so a re-run never duplicates a comment.
+5. **one auto-fix round** — `autoFixRounds` defaults to **1**: the loop addresses the
+   merged BLOCKER/HIGH findings once, then **stops**. It does not grind.
 
 Then it stops at the draft PR. No auto-merge, ever.
 
-### 5. Report and update beads
+### 4. Report and update beads
 
 When the workflow returns, for each issue report: the draft PR url, the gate
-result, the reviewer's top findings by severity, and whether the fix round ran.
+result, the top findings by severity **and by reviewer** (say plainly when the codex
+leg did not run — the review was one model family, and weaker for it), and whether
+the fix round ran.
 Move the beads issue to reflect reality (e.g. in-review / blocked-on-human) under
 `BEADS_DIR="$BEADS_DIR"` — never edit a `.beads` file in the target repo.
 
 Then hand back to the operator: **adjudicate the draft PR.** Merging is theirs.
 
-### 6. Clean up the run dir — but only after the PR merges
+### 5. Clean up the run dir — but only after the PR merges
 
-Each atom leaves a run dir at `~/.anvil/runs/<id>/`: the disposable worktree, the
-implementing agent's prompt file, its stream sidecar, and the builder's launcher
-script, log, status, and pid files. Once the operator has merged (or closed) the
-draft PR, that state has no reader left — retire it:
+Each atom leaves a run dir at `~/.anvil/runs/<id>/`, holding the disposable worktree
+and whatever scratch files the stages wrote. Once the operator has merged (or closed)
+the draft PR, that state has no reader left — retire it:
 
 ```sh
 git worktree remove "$HOME/.anvil/runs/<id>/worktree"   # --force if it has junk in it
@@ -221,17 +143,17 @@ it. That registration is the one trace anvil can leave in a repo it promised not
 to touch, so closing the loop here is part of zero repo imposition.
 
 **Do not clean up a failed implement.** Its worktree is deliberately kept: it holds
-whatever the builder did manage to commit, and the resume path (step 3) reuses it.
+whatever the builder did manage to commit, and a resumed run picks it back up.
 Delete it and a resumable run becomes a rerun. Sweep only ids whose PR is merged or
 closed, and leave anything still in flight alone.
 
 ## Hard rules
 
-- **Never shell out to `forge`.** Use only `claude` (headless, via the workflow),
-  `gh`, `bd`/`br`, `git`, and the Workflow tool.
-- **Never launch the permissionless builder without explicit consent** (step 3).
-  If a run is blocked for want of it, get the approval and resume that same run —
-  never work around the classifier.
+- **Never shell out to `forge`.** Use only `gh`, `bd`/`br`, `git`, `codex` (the second
+  reviewer), and the Workflow tool.
+- **No spawned builders.** Every agent in the atom is a workflow subagent that the
+  session sanctions. If you find yourself reaching for `claude --print`, stop: that
+  is the design this replaced.
 - **Zero repo imposition.** All beads/spec state stays under `$BEADS_DIR` and
   `~/.anvil/specs`. Never commit a `.beads` file into the target repo, never edit
   the repo's CLAUDE.md or settings, never require a per-worktree committed file.
