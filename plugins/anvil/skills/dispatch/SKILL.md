@@ -133,7 +133,7 @@ the draft PR, that state has no reader left — retire it:
 ```sh
 git worktree remove "$HOME/.anvil/runs/<id>/worktree"   # --force if it has junk in it
 git -C <repoRoot> worktree prune                        # drop the stale registration
-rm -rf "$HOME/.anvil/runs/<id>"                         # prompt + sidecar + dir
+rm -rf "$HOME/.anvil/runs/<id>"                         # scratch files + the dir itself
 ```
 
 Order matters: removing the directory without `git worktree remove` leaves the
