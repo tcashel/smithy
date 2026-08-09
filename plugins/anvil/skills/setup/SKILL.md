@@ -107,15 +107,21 @@ Every anvil skill and workflow honors `$BEADS_DIR`, and the workflow-invoking sk
 `$ANVIL_PLUGIN_ROOT` (because `${CLAUDE_PLUGIN_ROOT}` is unusable from skill text —
 see Step 4). Persist both:
 
+Persist them **together** — they are one block, not two errands. Every skill that
+re-derives `BEADS_DIR` from a default is a skill that can disagree with the operator's
+actual store, so write it down once:
+
 ```bash
-export BEADS_DIR="$HOME/.anvil/beads"
+export BEADS_DIR="$HOME/.anvil/beads"           # or the ANVIL_HOME the operator chose
 export ANVIL_PLUGIN_ROOT="$ANVIL_PLUGIN_ROOT"   # the value discovered in Step 4
 ```
 
-Offer to append these to their shell profile (`~/.zshrc` on this platform) — and
-**ask before editing it**. If they decline, tell them to export them themselves;
-skills fall back to `~/.anvil/beads` for `BEADS_DIR` and to a `find` over
-`~/.claude/plugins` for the plugin root, but persisting is more reliable.
+Offer to append that block to their shell profile (`~/.zshrc` on this platform) — and
+**ask before editing it**. Show the exact lines first, and check whether either export
+is already there before appending, so a re-run doesn't stack duplicates. If they
+decline, tell them to export both themselves; skills do fall back to `~/.anvil/beads`
+for `BEADS_DIR` and to a `find` over `~/.claude/plugins` for the plugin root, but a
+fallback is a guess and an export is a fact.
 
 ## Step 6 — Prove zero repo imposition (the decisive check)
 

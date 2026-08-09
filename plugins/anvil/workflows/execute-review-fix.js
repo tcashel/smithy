@@ -273,7 +273,7 @@ const stage = (title, fn) => fn;
   const ids = parseIds(parsedArgs);
   const builderPermissions = parseBuilderPermissions(parsedArgs);
   if (ids.length === 0) {
-    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...] , or the object form {\"ids\":[\"<id>\"],\"builderPermissions\":\"skip\"|\"inherit\"}");
+    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...], or the object form {\"ids\":[\"<id>\"],\"builderPermissions\":\"skip\"|\"inherit\"}");
     return { atoms: [] };
   }
   log(`execute-review-fix: ${ids.length} issue(s): ${ids.join(", ")}`);

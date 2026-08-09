@@ -8,9 +8,9 @@
  * angles/models, plus a third leg relaying the `codex` CLI when it is
  * installed — then a synthesizer merges them into corroborated /
  * single-critic-only / conflicting findings with CONCRETE replacement spec
- * text plus an Open Questions list. Non-conflicting, non-open-question
- * edits may be applied back to the spec file; conflicts and open questions
- * are LEFT for /anvil:adjudicate.
+ * text plus an Open Questions list. It writes NOTHING: the spec file is left
+ * exactly as it was found, edits included, because /anvil:adjudicate is the
+ * pipeline's single write-back surface (two of them would double-apply).
  *
  * Mirrors Forge's two-critic + synthesizer model (forge-synthesizer skill,
  * src/core/critique.ts) but reassembled from bare parts — never shells out
@@ -43,12 +43,12 @@
 export const meta = {
   name: "plan-critique-improve",
   description:
-    "A critic panel reviews a locked anvil spec in parallel — two independent critics on different angles/models, plus the codex CLI as a third leg when it is installed; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list, then optionally applies the safe non-conflicting edits back to the spec file.",
+    "A critic panel reviews a locked anvil spec in parallel — two independent critics on different angles/models, plus the codex CLI as a third leg when it is installed; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list. The spec file is left unchanged — /anvil:adjudicate is the only surface that writes a spec.",
   phases: [
     { title: "load", detail: "Resolve and read the spec body (sole input)" },
     { title: "critique", detail: "Run the panel in parallel: two independent critics, plus codex when available" },
-    { title: "synthesize", detail: "Merge the two critiques into prioritized, classified recommendations" },
-    { title: "apply", detail: "Apply safe non-conflicting edits; leave conflicts/open questions for adjudication" },
+    { title: "synthesize", detail: "Merge the critiques into prioritized, classified recommendations" },
+    { title: "handoff", detail: "Leave the spec untouched; hand the recommendations to /anvil:adjudicate" },
   ],
 };
 
@@ -431,7 +431,7 @@ const CODEX_ANGLE = {
   // /anvil:critique skill persists this recommendations object to
   // ~/.anvil/specs/<id>.recommendations.md so adjudicate can apply edits and
   // resolve cruxes against the spec.
-  phase("apply");
+  phase("handoff");
   log(
     "Spec left unchanged by design — /anvil:adjudicate applies the edits and resolves " +
       `${recommendations.conflicts?.length || 0} conflict(s) + ` +

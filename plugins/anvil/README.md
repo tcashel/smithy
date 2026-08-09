@@ -45,10 +45,11 @@ it by hand.
    "$ANVIL_ROOT"/bootstrap/install-beads.sh        # ANVIL_HOME=~/work/anvil to relocate
    ```
 
-2. Export `BEADS_DIR` so every anvil skill and workflow sees the same out-of-repo store. Add it to your shell profile:
+2. Export both variables so every anvil skill and workflow sees the same out-of-repo store *and* can find the bundled workflow scripts. The bootstrap prints this block with your paths filled in; add it to your shell profile:
 
    ```bash
    export BEADS_DIR="$HOME/.anvil/beads"
+   export ANVIL_PLUGIN_ROOT="$ANVIL_ROOT"     # the plugin dir found in step 1
    ```
 
 3. Sanity check — this should list nothing yet and create **nothing** in your repo:

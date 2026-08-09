@@ -165,6 +165,28 @@ Move the beads issue to reflect reality (e.g. in-review / blocked-on-human) unde
 
 Then hand back to the operator: **adjudicate the draft PR.** Merging is theirs.
 
+### 6. Clean up the run dir — but only after the PR merges
+
+Each atom leaves a run dir at `~/.anvil/runs/<id>/`: the disposable worktree, the
+implementing agent's prompt file, and its stream sidecar. Once the operator has
+merged (or closed) the draft PR, that state has no reader left — retire it:
+
+```sh
+git worktree remove "$HOME/.anvil/runs/<id>/worktree"   # --force if it has junk in it
+git -C <repoRoot> worktree prune                        # drop the stale registration
+rm -rf "$HOME/.anvil/runs/<id>"                         # prompt + sidecar + dir
+```
+
+Order matters: removing the directory without `git worktree remove` leaves the
+target repo carrying a dangling worktree registration, and `prune` is what clears
+it. That registration is the one trace anvil can leave in a repo it promised not
+to touch, so closing the loop here is part of zero repo imposition.
+
+**Do not clean up a failed implement.** Its worktree is deliberately kept: it holds
+whatever the builder did manage to commit, and the resume path (step 3) reuses it.
+Delete it and a resumable run becomes a rerun. Sweep only ids whose PR is merged or
+closed, and leave anything still in flight alone.
+
 ## Hard rules
 
 - **Never shell out to `forge`.** Use only `claude` (headless, via the workflow),

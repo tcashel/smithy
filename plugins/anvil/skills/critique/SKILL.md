@@ -31,7 +31,9 @@ echo "$WF"
 (`/anvil:setup` persists `ANVIL_PLUGIN_ROOT`; the `find` is the fallback. If both miss, ask the operator for the plugin path.) Then invoke the Workflow tool with:
 
 - `scriptPath`: the resolved absolute path (the value of `$WF`)
-- `args`: the spec id and/or the resolved spec body path.
+- `args`: either shape — the workflow accepts both:
+  - **a locator string** — the spec id (`anvil-0042`) or the absolute path to the spec body (`/Users/you/.anvil/specs/anvil-0042.md`).
+  - **an object** — `{"specId": "anvil-0042", "specPath": "/Users/you/.anvil/specs/anvil-0042.md", "targetRepo": "/Users/you/repositories/drover"}`, plus an optional `"note"` for your own bookkeeping (the workflow ignores it). `specPath` wins over `specId` when both are given. **Prefer this shape when you know the target repo:** `targetRepo` is the directory the codex leg runs `codex exec` from, and without it that leg has to infer the repo from the spec body.
 
 The workflow runs the panel in parallel:
 
