@@ -343,32 +343,41 @@ async function runReview(item, label) {
   return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
 }
 
-// ── Two reviewers, two model families ────────────────────────────────────────
+// ── Two reviewers, two model families, run concurrently ──────────────────────
 // The panel taught us this (LEARNINGS §3) and four consecutive drover rounds paid
 // for it: the codex leg caught merge-blocking defects the same-family reviewer
-// did not. So the atom reviews with both — anvil-reviewer, then a relay of the
-// `codex` CLI — and merges what they found. Run in sequence, not in parallel:
-// nesting a parallel() inside a pipeline stage is not a shape this runtime is
-// known to support, and a slower review is cheaper than a mystery.
+// did not. So the atom reviews with both — anvil-reviewer and a relay of the
+// `codex` CLI — and merges what they found.
+//
+// They run under `parallel()` inside the stage callback, which is the runtime's
+// canonical shape for fanning out within a pipeline stage. The two are genuinely
+// independent (both read-only against the same PR), and the codex leg is the slow
+// one — sequencing them would have made every review wait out a full xhigh pass
+// before the fast reviewer even started.
 //
 // codex is OPTIONAL throughout. No binary, a failed invocation, or a failed relay
-// agent all mean "no second opinion" — never a fabricated one.
+// agent all mean "no second opinion" — never a fabricated one. `parallel()`
+// resolves a failed leg to null, so each leg keeps its own null-collapse.
 async function runBothReviews(item, label, opts) {
-  const primary = await runReview(item, label);
   // The post-fix re-review skips codex on purpose: that verdict is informational
   // (the atom stops either way), and a second full xhigh pass is real money for a
   // number nothing branches on. Say "not-rerun" rather than "unavailable" — the
   // leg did run, on the review that mattered.
   if (opts && opts.withCodex === false) {
-    const merged = mergeReviews(primary, null);
+    const merged = mergeReviews(await runReview(item, label), null);
     return merged ? { ...merged, codexLeg: "not-rerun" } : merged;
   }
-  const codexRaw = await agent(codexReviewPrompt(item), {
-    schema: codexReviewSchema,
-    phase: "review",
-    label: `${label}:codex`,
-    model: "sonnet",
-  });
+
+  const [primary, codexRaw] = await parallel([
+    () => runReview(item, label),
+    () =>
+      agent(codexReviewPrompt(item), {
+        schema: codexReviewSchema,
+        phase: "review",
+        label: `${label}:codex`,
+        model: "sonnet",
+      }),
+  ]);
   const codex = codexRaw && codexRaw.available !== false ? codexRaw : null;
   log(
     codex
