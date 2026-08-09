@@ -4,7 +4,7 @@
 
 anvil is a non-invasive, operator-scoped reassembly of the Forge pipeline — `plan → critique → adjudicate → dispatch → review → fix` — built entirely from bare Claude Code primitives: skills, the Workflow tool, subagents, and the [beads](https://github.com/gastownhall/beads) issue tracker (`bd` / `br`).
 
-You shape a piece of work into a self-contained spec, stress-test it with a two-critic panel, adjudicate the cruxes yourself, then hand the locked spec to a headless loop that launches an implementing agent, gates it on quality, opens a **draft** PR, reviews it, and runs one auto-fix round. The loop is a job, not a show. It stops at the draft PR for you to adjudicate the merge. **It never auto-merges.**
+You shape a piece of work into a self-contained spec, stress-test it with a multi-critic panel, adjudicate the cruxes yourself, then hand the locked spec to a headless loop that launches an implementing agent, gates it on quality, opens a **draft** PR, reviews it, and runs one auto-fix round. The loop is a job, not a show. It stops at the draft PR for you to adjudicate the merge. **It never auto-merges.**
 
 ## Zero repo imposition
 
@@ -78,7 +78,7 @@ One skill sets anvil up; four drive the pipeline from idea to a locked, dispatch
 
 - **`/anvil:plan`** — Turn an idea into a **self-contained** spec. The implementing agent later sees *only* the spec body — not your planning conversation, not the repo's `CLAUDE.md`, nothing else — so planning's job is to make the spec stand entirely on its own. A vague spec produces a confused agent.
 
-- **`/anvil:critique`** — Run a two-critic panel (`anvil-critic`) against the draft spec. Each critic emits exactly one ` ```anvil-spec-critique ` fenced block; a synthesizer step folds them into one ` ```anvil-spec-recommendations ` block of cruxes, ranked BLOCKER / HIGH / MEDIUM / LOW. This is invoked via the bundled `plan-critique-improve.js` workflow.
+- **`/anvil:critique`** — Run the critic panel against the draft spec: two `anvil-critic` passes on different models and angles, plus a third leg relaying the `codex` CLI when it's installed (a different model family — cross-family agreement is the strongest corroboration available, and the leg reports itself unavailable rather than inventing findings when codex is absent). Each critic emits exactly one ` ```anvil-spec-critique ` fenced block; a synthesizer step folds them into one ` ```anvil-spec-recommendations ` block of cruxes, ranked BLOCKER / HIGH / MEDIUM / LOW. This is invoked via the bundled `plan-critique-improve.js` workflow.
 
 - **`/anvil:adjudicate`** — *You* resolve the cruxes. Accept, reject, or rewrite each recommendation, folding the decisions back into the spec until it is mergeable-quality and locked. When a spec is locked it becomes a `bd` issue whose **body** is `~/.anvil/specs/<id>.md`.
 
@@ -88,7 +88,7 @@ One skill sets anvil up; four drive the pipeline from idea to a locked, dispatch
 
 Two headless Workflow scripts do the supervised, long-running work. Skills invoke them through the Claude Code Workflow tool with a `scriptPath` pointing at the bundled file. (`${CLAUDE_PLUGIN_ROOT}` is not usable from skill text, so the skills resolve the absolute path at runtime via `$ANVIL_PLUGIN_ROOT` — set by `/anvil:setup` — with a `find` over `~/.claude/plugins` as a fallback.)
 
-- **`workflows/plan-critique-improve.js`** — fans out the two-critic panel, synthesizes the cruxes, and threads the recommendations back into the spec. Backs `/anvil:critique` (and the planning loop).
+- **`workflows/plan-critique-improve.js`** — fans out the critic panel (two critics, plus the codex leg when available) and synthesizes the cruxes. It leaves the spec file **unchanged** and returns the recommendations; `/anvil:adjudicate` is the only surface that writes a spec. Backs `/anvil:critique` (and the planning loop).
 
 - **`workflows/execute-review-fix.js`** — runs the execution atom per ready spec: launch → quality gate → draft PR → review → auto-fix (`autoFixRounds` default `1`) → stop. Backs `/anvil:dispatch`.
 

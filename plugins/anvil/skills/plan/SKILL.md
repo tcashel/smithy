@@ -19,7 +19,7 @@ There is **no `forge` binary** in this world. You use only `bd`/`br`, `git`, pla
 
 The spec you lock here is picked up downstream:
 
-1. `/anvil:critique` runs a two-critic panel against the spec body and synthesizes recommendations.
+1. `/anvil:critique` runs the critic panel against the spec body and synthesizes recommendations.
 2. `/anvil:adjudicate` resolves the cruxes and produces the improved, locked spec.
 3. `/anvil:dispatch` reads `bd ready` (honoring `$BEADS_DIR`), launches a fresh-worktree agent against the spec body, runs the quality gate, opens a **draft** PR, runs the reviewer, and applies one auto-fix round — then stops for the operator to adjudicate the merge.
 
@@ -129,7 +129,7 @@ After locking, surface to the operator:
 
 ## Next step
 
-Tell the operator the spec is locked and the next step is **`/anvil:critique`**, which runs the two-critic panel against the spec body and emits ```` ```anvil-spec-recommendations ````. Do not pre-critique your own draft here — write the cleanest spec you can and let the critique pass refine it.
+Tell the operator the spec is locked and the next step is **`/anvil:critique`**, which runs the critic panel against the spec body and emits ```` ```anvil-spec-recommendations ````. Do not pre-critique your own draft here — write the cleanest spec you can and let the critique pass refine it.
 
 ## Things to avoid
 

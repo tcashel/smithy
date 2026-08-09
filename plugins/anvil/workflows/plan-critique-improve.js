@@ -3,9 +3,10 @@
  * anvil — plan-critique-improve
  *
  * Adversarial spec hardening from bare Claude Code primitives. Takes ONE
- * locked spec (the file ~/.anvil/specs/<id>.md), runs TWO independent
- * critics in parallel from deliberately different angles/models so their
- * blind spots differ, then a synthesizer merges them into corroborated /
+ * locked spec (the file ~/.anvil/specs/<id>.md) and runs a critic panel in
+ * parallel — two independent critics from deliberately different
+ * angles/models, plus a third leg relaying the `codex` CLI when it is
+ * installed — then a synthesizer merges them into corroborated /
  * single-critic-only / conflicting findings with CONCRETE replacement spec
  * text plus an Open Questions list. Non-conflicting, non-open-question
  * edits may be applied back to the spec file; conflicts and open questions
@@ -28,9 +29,11 @@
  * never "be more specific".
  *
  * Args: a spec id (e.g. "anvil-0042") or an absolute path to a spec .md
- * file. If an id, the spec is resolved to $ANVIL_SPECS_DIR/<id>.md
- * (default ~/.anvil/specs/<id>.md). State is operator-scoped and
- * out-of-repo — this workflow never writes into the target repository.
+ * file — or the object form { specId, specPath, targetRepo, note? }, which
+ * additionally tells the codex leg which repo to run from. If an id, the
+ * spec is resolved to $ANVIL_SPECS_DIR/<id>.md (default
+ * ~/.anvil/specs/<id>.md). State is operator-scoped and out-of-repo — this
+ * workflow never writes into the target repository.
  *
  * Runtime note: the workflow runtime FORBIDS wall-clock and randomness
  * builtins. We never call Date.now()/new Date()/Math.random(). Where the
@@ -40,10 +43,10 @@
 export const meta = {
   name: "plan-critique-improve",
   description:
-    "Two independent critics (different angles/models) review a locked anvil spec in parallel; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list, then optionally applies the safe non-conflicting edits back to the spec file.",
+    "A critic panel reviews a locked anvil spec in parallel — two independent critics on different angles/models, plus the codex CLI as a third leg when it is installed; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list, then optionally applies the safe non-conflicting edits back to the spec file.",
   phases: [
     { title: "load", detail: "Resolve and read the spec body (sole input)" },
-    { title: "critique", detail: "Run two independent critics in parallel from differing angles" },
+    { title: "critique", detail: "Run the panel in parallel: two independent critics, plus codex when available" },
     { title: "synthesize", detail: "Merge the two critiques into prioritized, classified recommendations" },
     { title: "apply", detail: "Apply safe non-conflicting edits; leave conflicts/open questions for adjudication" },
   ],
@@ -115,6 +118,28 @@ const CRITIQUE_SCHEMA = {
 };
 
 /**
+ * The optional third critic (Critic C) is a RELAY: an agent that hands the same
+ * critique prompt to the `codex` CLI — a different model family — and reports
+ * back what codex found. Same shape as a critic, plus `available`: false means
+ * the codex binary was missing or the invocation failed, and the findings list
+ * MUST then be empty. An honest "unavailable" is a valid result; an invented
+ * critique would poison the corroboration signal the panel exists to produce.
+ */
+const CODEX_CRITIQUE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [...CRITIQUE_SCHEMA.required, "available"],
+  properties: {
+    ...CRITIQUE_SCHEMA.properties,
+    critic: { type: "string", description: "Always 'C' — the codex relay leg" },
+    available: {
+      type: "boolean",
+      description: "True only if codex actually ran and produced a critique. False when the CLI is absent or the invocation failed — findings must then be empty.",
+    },
+  },
+};
+
+/**
  * The synthesizer's merged recommendations. Classifies every finding as
  * corroborated / single-critic-only / conflicting, proposes concrete spec
  * edits with EXACT current text + replacement text, and lifts product-intent
@@ -168,7 +193,7 @@ const RECOMMENDATIONS_SCHEMA = {
         required: ["question", "raisedBy", "context"],
         properties: {
           question: { type: "string" },
-          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "both"] },
+          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "Critic C (codex)", "both"] },
           context: { type: "string", description: "Why this matters / what hinges on the answer" },
         },
       },
@@ -184,6 +209,7 @@ const RECOMMENDATIONS_SCHEMA = {
           title: { type: "string" },
           criticAPosition: { type: "string" },
           criticBPosition: { type: "string" },
+          criticCPosition: { type: "string", description: "The codex leg's position, when it ran and took a side. Omit otherwise." },
           context: { type: "string", description: "What the human must decide to resolve it" },
         },
       },
@@ -199,6 +225,7 @@ const RECOMMENDATIONS_SCHEMA = {
           finding: { type: "string" },
           criticA: { type: "string", description: "e.g. '✓ BLOCKER', '—', or '✗ (disagrees)'" },
           criticB: { type: "string" },
+          criticC: { type: "string", description: "Same notation for the codex leg. Omit when it did not run." },
           classification: { type: "string", enum: ["corroborated", "single-critic-only", "conflicting"] },
           action: { type: "string", description: "e.g. 'Edit #1', 'Open Question #2', 'Conflict #1'" },
         },
@@ -238,11 +265,33 @@ const CRITIC_ANGLES = [
   },
 ];
 
+// ─── The optional third critic: codex ───────────────────────────────────────
+//
+// A and B are the same model family. Two members of one family share blind
+// spots — and share hallucinations — so agreement between them is weaker
+// evidence than it looks. The third leg hands the same critique prompt to the
+// `codex` CLI when it is installed, which buys genuine cross-family
+// corroboration (LEARNINGS §3: the codex leg caught merge-blocking defects in
+// four consecutive drover rounds). It is strictly OPTIONAL: no codex binary, or
+// a failed invocation, degrades the panel back to exactly the two-critic
+// behavior — never to a fabricated third opinion.
+
+const CODEX_ANGLE = {
+  label: "C",
+  angle: "Cross-model corroboration (codex)",
+  focus:
+    "Hunt for anything that would leave a competent implementer unable to finish without guessing: acceptance criteria no one could verify, cited paths that don't match what is actually in the repo, sections that contradict each other, and integration points the spec never names. You are a DIFFERENT model family from the other two critics — your worth is precisely what they cannot see, so report what you actually find rather than what you assume they already caught.",
+};
+
 // ─── Workflow body ──────────────────────────────────────────────────────────
 // Runs at top level: agent/parallel/phase/log/args are runtime globals.
 
 {
-  const specArg = (args || "").trim();
+  // Both arg shapes collapse to the same two things: a locator string the load
+  // step already knows how to resolve, and (optionally) the repo the critics
+  // verify cited paths against. The locator for a bare id/path is the trimmed
+  // arg itself, exactly as before — the load prompt is unchanged.
+  const { locator: specArg, targetRepo } = parseSpecArgs(args);
   if (!specArg) {
     log("No spec id or path provided. Usage: /anvil:critique <spec-id|path-to-spec.md>");
     return { error: "missing-spec-arg" };
@@ -277,9 +326,10 @@ const CRITIC_ANGLES = [
   }
   log(`Loaded spec "${spec.title}" (${spec.body.length} chars) from ${spec.specPath}`);
 
-  // ── Phase 2: two independent critics in parallel ──────────────────────────
+  // ── Phase 2: the critic panel in parallel ─────────────────────────────────
   phase("critique");
   log("Running two independent critics in parallel (differing angles/models)…");
+  log("Third leg: probing for the codex CLI (cross-model corroboration; skipped if absent).");
 
   // Prefer the anvil-critic plugin subagent. Installed plugin agents register
   // NAMESPACED ("anvil:anvil-critic"); the bare name covers any unprefixed
@@ -299,21 +349,47 @@ const CRITIC_ANGLES = [
     return agent(prompt, opts);
   };
 
-  const critiques = await parallel(CRITIC_ANGLES.map((ac) => () => runCritic(ac)));
+  // The codex leg is a RELAY, not a critic: it shells out to another model's CLI
+  // and transcribes. It therefore runs on the default subagent (which carries the
+  // tools to run a command and read the session transcript), never on the
+  // read-only anvil-critic type.
+  const runCodexCritic = async () =>
+    agent(buildCodexCriticPrompt(spec, targetRepo), {
+      model: "sonnet",
+      schema: CODEX_CRITIQUE_SCHEMA,
+      phase: "critique",
+      label: "critic-C-codex",
+    });
+
+  const critiques = await parallel([
+    ...CRITIC_ANGLES.map((ac) => () => runCritic(ac)),
+    () => runCodexCritic(),
+  ]);
 
   // parallel() resolves a failed/skipped agent to null — degrade, don't throw.
-  const [critiqueA, critiqueB] = critiques;
-  if (!critiqueA && !critiqueB) {
+  const [critiqueA, critiqueB, codexResult] = critiques;
+  // Absent CLI, failed invocation, and failed agent all mean the same thing: no
+  // third opinion. Never "a third opinion that happens to have no findings".
+  const critiqueC = codexResult && codexResult.available !== false ? codexResult : null;
+  log(
+    critiqueC
+      ? `Codex leg RAN (${critiqueC.findings?.length ?? 0} findings) — cross-model corroboration available.`
+      : `Codex leg unavailable — two-critic panel. ${codexResult?.summary || "(codex CLI missing, or the relay agent failed)"}`,
+  );
+  if (!critiqueA && !critiqueB && !critiqueC) {
     log("Both critics failed — nothing to synthesize.");
     return { error: "critics-failed", specId: spec.specId, specPath: spec.specPath };
   }
   if (!critiqueA || !critiqueB) {
     log(
-      `Critic ${!critiqueA ? "A" : "B"} failed — proceeding single-critic. ` +
-        "Corroboration is unavailable; the synthesizer is told so.",
+      `Critic ${!critiqueA ? "A" : "B"} failed — proceeding without it. ` +
+        (critiqueC
+          ? "The codex leg still gives the synthesizer a second, cross-family opinion."
+          : "Corroboration is unavailable; the synthesizer is told so."),
     );
   }
-  const totalFindings = (critiqueA?.findings?.length || 0) + (critiqueB?.findings?.length || 0);
+  const totalFindings =
+    (critiqueA?.findings?.length || 0) + (critiqueB?.findings?.length || 0) + (critiqueC?.findings?.length || 0);
   log(
     `Critic A (${CRITIC_ANGLES[0].angle}): ${critiqueA?.findings?.length ?? "FAILED"} findings. ` +
       `Critic B (${CRITIC_ANGLES[1].angle}): ${critiqueB?.findings?.length ?? "FAILED"} findings. ` +
@@ -325,7 +401,7 @@ const CRITIC_ANGLES = [
   log("Synthesizing critiques → corroborated / single-critic / conflicting + open questions…");
 
   // Synthesis is a planning-phase judgment call — run it on the strongest model.
-  const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB), {
+  const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC), {
     schema: RECOMMENDATIONS_SCHEMA,
     model: "opus",
     phase: "synthesize",
@@ -338,7 +414,7 @@ const CRITIC_ANGLES = [
       error: "synthesizer-failed",
       specId: spec.specId,
       specPath: spec.specPath,
-      critiques: { A: critiqueA, B: critiqueB },
+      critiques: { A: critiqueA, B: critiqueB, C: critiqueC },
     };
   }
 
@@ -366,8 +442,36 @@ const CRITIC_ANGLES = [
     specId: spec.specId,
     specPath: spec.specPath,
     title: spec.title,
+    codexLeg: critiqueC ? "ran" : "unavailable",
     recommendations,
   };
+}
+
+// ─── Args ───────────────────────────────────────────────────────────────────
+//
+// Two accepted shapes, both collapsing to a locator the load step already
+// understands:
+//   - a bare spec id or absolute spec path — "anvil-0042", "/abs/anvil-0042.md"
+//   - the object form { specId, specPath, targetRepo, note? }, which the
+//     Workflow tool may hand through as a JSON string
+// targetRepo (object form only) is the directory the codex leg runs from; the
+// other critics resolve the repo themselves. `note` is for the caller's own
+// bookkeeping — this workflow ignores it. A function declaration, so the
+// top-level body can call it (a const would still be in the TDZ).
+function parseSpecArgs(args) {
+  let v = args;
+  if (typeof v === "string" && v.trim().startsWith("{")) {
+    try {
+      v = JSON.parse(v);
+    } catch (e) { /* not JSON after all — fall through and treat it as a locator */ }
+  }
+  if (v && typeof v === "object") {
+    return {
+      locator: String(v.specPath || v.specId || "").trim(),
+      targetRepo: v.targetRepo ? String(v.targetRepo).trim() : "",
+    };
+  }
+  return { locator: (v || "").trim(), targetRepo: "" };
 }
 
 // ─── Prompt builders ────────────────────────────────────────────────────────
@@ -418,8 +522,69 @@ function buildCriticPrompt(spec, angleConfig) {
   ].join("\n");
 }
 
-function buildSynthPrompt(spec, critiqueA, critiqueB) {
-  const singleCritic = !critiqueA || !critiqueB;
+// The third leg's prompt has two layers: instructions for the RELAY agent (run
+// the CLI, recover the full message, transcribe it), wrapping the very same
+// critic prompt A and B get — that is what makes codex's findings comparable
+// rather than a differently-shaped opinion.
+function buildCodexCriticPrompt(spec, targetRepo) {
+  const promptFile = `$HOME/.anvil/runs/critique/${spec.specId}/codex-prompt.txt`;
+  return [
+    "You are the RELAY for the critic panel's third leg. You do NOT critique the spec yourself:",
+    "you hand it to the `codex` CLI — a different model family, which is the entire point — and",
+    "report back what codex found. Use Bash.",
+    "",
+    "## 1. Is codex even here?",
+    "Run `command -v codex`. If it is not on PATH, STOP: return available=false, findings=[],",
+    "verified=[], and a summary saying the codex CLI is not installed. Do NOT critique the spec",
+    "yourself and do NOT invent findings — an honest 'unavailable' is the correct result, while a",
+    "fabricated critique corrupts the corroboration signal this panel exists to produce.",
+    "",
+    "## 2. Run it from the target repo",
+    targetRepo
+      ? `Run codex from this directory: ${targetRepo}`
+      : "Run codex from the repo the spec targets — the spec body names it. If you cannot determine\n" +
+        "the repo, use the current working directory and say so in `verified`.",
+    "",
+    `Write the critique prompt at the bottom of this message to ${promptFile}`,
+    "(`mkdir -p` its directory first) — it is far too long to quote safely on a command line —",
+    "then run:",
+    "",
+    "```bash",
+    `codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' "$(cat ${promptFile})"`,
+    "```",
+    "",
+    "Give it room to finish; at that reasoning effort it thinks for a while. If the command fails",
+    "— non-zero exit, an auth or model error, empty output — return available=false with the",
+    "error text in the summary. Again: never substitute your own critique for codex's.",
+    "",
+    "## 3. Recover the FULL message before you relay it",
+    "codex's terminal output can be clipped mid-message, and a clipped critique silently loses",
+    "findings. The complete text is on disk in the session transcript:",
+    "~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer. Find",
+    "the transcript for the session you just ran by matching its CONTENT to this spec (other,",
+    "unrelated codex sessions write into the same tree — do not grab one by position), then read",
+    "its last assistant message in full. Where the terminal and the transcript disagree, the",
+    "transcript wins.",
+    "",
+    "## 4. Relay it faithfully",
+    "codex has no structured-return channel — it will emit the fenced block and nothing else, so",
+    "converting that block into this step's schema is YOUR job. Emit the same contract the other",
+    "critics emit: one fenced block tagged exactly `anvil-spec-critique`, then the structured",
+    `object with critic="C", angle="${CODEX_ANGLE.angle}", and available=true.`,
+    "Carry codex's findings, severities, and suggestions across as codex stated them — you are a",
+    "wire, not an editor. Drop a finding only when codex left a required field with nothing to",
+    "fill it, and note every such drop in `verified`.",
+    "",
+    "──────────────── hand everything below this line to codex, verbatim ────────────────",
+    "",
+    buildCriticPrompt(spec, CODEX_ANGLE),
+  ].join("\n");
+}
+
+function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
+  // "single critic" now means "fewer than two critiques came back" — with the
+  // codex leg absent that is exactly the old `!critiqueA || !critiqueB`.
+  const singleCritic = [critiqueA, critiqueB, critiqueC].filter(Boolean).length < 2;
   return [
     "You are the anvil Critique Synthesizer. You are a NEUTRAL mediator, not a third critic — do not",
     "add your own opinions to severity; defer to the critics.",
@@ -435,6 +600,26 @@ function buildSynthPrompt(spec, critiqueA, critiqueB) {
     "- A finding raised by only ONE critic is medium confidence → 'single-critic-only' (use judgment).",
     "- A finding the two critics DISAGREE on (one says fine, one says broken) → a CONFLICT; do NOT",
     "  resolve it — put it in `conflicts` for the human to adjudicate.",
+    // Present ONLY when the codex leg ran, so a two-critic pass sees the exact
+    // prompt it has always seen.
+    ...(critiqueC
+      ? [
+          "",
+          "A THIRD critique is below. Critic C is a relay of the `codex` CLI — a DIFFERENT MODEL",
+          "FAMILY from A and B. Weigh it accordingly:",
+          "- Agreement ACROSS families (C with A and/or B) is the strongest evidence available to you.",
+          "  A and B are the same family: they can share a blind spot, and they can share a",
+          "  hallucination. C agreeing with them cannot happen by that mechanism.",
+          "- 'corroborated' still means two or more critics raised it — name WHICH ones in `source`.",
+          "- A finding only C raised is 'single-critic-only', but that is not a lesser class: catching",
+          "  what one family cannot see is exactly why the second family is here. Judge it on merits.",
+          "- Fill `criticC` in every `triage` row. Use `criticCPosition` in a conflict where C took a",
+          "  side, and `raisedBy: \"Critic C (codex)\"` for an open question only C raised (`\"both\"`",
+          "  covers any question more than one critic raised).",
+          "- Say in `confidenceNote` that the codex leg RAN, and whether it corroborated A/B or",
+          "  diverged from them.",
+        ]
+      : []),
     "",
     "## Hard rules",
     "- De-duplicate: the same weakness flagged by both critics is ONE corroborated finding, not two.",
@@ -462,6 +647,13 @@ function buildSynthPrompt(spec, critiqueA, critiqueB) {
     "",
     `## Critique B — angle: ${critiqueB?.angle || "(B)"}`,
     critiqueB ? JSON.stringify(critiqueB, null, 2) : "(critic B failed — no critique)",
+    ...(critiqueC
+      ? [
+          "",
+          `## Critique C — codex relay, angle: ${critiqueC.angle || "(C)"}`,
+          JSON.stringify(critiqueC, null, 2),
+        ]
+      : []),
     "",
     "## Output",
     "First emit a single fenced block tagged exactly `anvil-spec-recommendations` with: Summary,",

@@ -11,7 +11,7 @@ You are given a spec id `<id>`. Its body lives at `~/.anvil/specs/<id>.md` and i
 
 A **CRUX** is anything that blocks the spec from being self-contained:
 
-- a **Conflicting** finding — the two critics disagree (one says X is fine, the other says X is broken), or
+- a **Conflicting** finding — the critics disagree (one says X is fine, another says X is broken), or
 - an **Open Question** — the right fix depends on product intent, not spec quality.
 
 Recommended edits that are *corroborated* or *single-critic-only* are NOT cruxes — they are concrete proposed edits the synthesizer already wrote text for. Apply them too (see "Recommended edits" below), but they don't require an A/B decision; the operator can accept all, or veto individually.
@@ -49,7 +49,7 @@ CRUX <n> of <total>  [CONFLICT | OPEN QUESTION]   severity: BLOCKER|HIGH|MEDIUM|
   Choose:  A   B   E)dit (type your own resolution)   S)kip
 ```
 
-For a **conflict**, A and B are the two critics' opposing positions, quoted faithfully (preserve the higher severity per the synthesizer rule). For an **open question**, frame A/B as the two most plausible answers the synthesizer or critics implied; if it's genuinely open-ended, present A/B as the leading candidates and lean on `E` for anything else.
+For a **conflict**, A and B are the opposing positions, quoted faithfully (preserve the higher severity per the synthesizer rule). Keep the loop two-way even when a third critic weighed in: if the conflict carries a `criticCPosition` (the codex leg took a side), fold it into whichever option it backs and say so on that line — *"B) … (codex agrees)"*. A cross-family second is worth knowing about; a third keystroke is not. For an **open question**, frame A/B as the two most plausible answers the synthesizer or critics implied; if it's genuinely open-ended, present A/B as the leading candidates and lean on `E` for anything else.
 
 Then take the operator's choice:
 

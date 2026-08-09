@@ -46,7 +46,7 @@ anvil is five slash commands. Run setup once, then walk an idea through the loop
 ```
 /anvil:setup        # one-time: install beads operator-scoped, prove zero repo imposition
 /anvil:plan         # turn an idea (or a plan-mode plan) into a locked spec + beads issue
-/anvil:critique     # two independent critics + a synthesizer harden the spec
+/anvil:critique     # a critic panel (+ codex, when installed) and a synthesizer harden the spec
 /anvil:adjudicate   # you resolve the cruxes; decisions fold back into the spec, then it locks
 /anvil:dispatch     # headless build → quality gate → DRAFT PR → review → one auto-fix → stop
 ```

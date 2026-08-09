@@ -1,11 +1,11 @@
 ---
 name: critique
-description: "Runs the two-critic panel over a spec. Invoke when the user wants a spec reviewed, critiqued, or hardened before execution. Dispatches two independent critics, synthesizes their findings into a prioritized recommendations document, and surfaces conflicts plus open questions for the user to adjudicate. Entry point for the plan -> critique -> adjudicate flow."
+description: "Runs the multi-critic panel over a spec. Invoke when the user wants a spec reviewed, critiqued, or hardened before execution. Dispatches two independent critics plus the codex CLI as a third when it is installed, synthesizes their findings into a prioritized recommendations document, and surfaces conflicts plus open questions for the user to adjudicate. Entry point for the plan -> critique -> adjudicate flow."
 ---
 
 # anvil:critique
 
-You are the entry point for the **two-critic panel**. Your job is glue: take a spec, hand it to the `plan-critique-improve` workflow, and report back what the panel found. You do **not** critique the spec yourself, and you do **not** edit it. The workflow does the real work; you orchestrate and summarize.
+You are the entry point for the **critic panel**. Your job is glue: take a spec, hand it to the `plan-critique-improve` workflow, and report back what the panel found. You do **not** critique the spec yourself, and you do **not** edit it. The workflow does the real work; you orchestrate and summarize.
 
 ## What you need
 
@@ -33,29 +33,36 @@ echo "$WF"
 - `scriptPath`: the resolved absolute path (the value of `$WF`)
 - `args`: the spec id and/or the resolved spec body path.
 
-The workflow runs two independent critics (the `anvil-critic` subagent, twice, with differing framing so their blind spots don't overlap), then runs a synthesizer step that merges both critiques.
+The workflow runs the panel in parallel:
+
+- **Critics A and B** — the `anvil-critic` subagent twice, on different models and different angles (A: correctness and contracts; B: completeness and self-containment) so their blind spots don't overlap.
+- **Critic C, the codex leg** — an agent that hands the same critique prompt to the `codex` CLI and relays what it found. Different model *family*, so it fails differently than A and B do. It is **optional**: no `codex` on `PATH`, or a failed invocation, and the leg reports itself unavailable and the panel is the two critics above. It never fabricates a third opinion to fill the slot.
+
+Then a synthesizer step merges the critiques it got.
 
 ## What the workflow returns
 
-The synthesizer classifies every finding across the two critiques:
+The synthesizer classifies every finding across the critiques:
 
-- **Corroborated** — both critics raised it. High confidence; almost certainly real.
-- **Single-critic-only** — only one critic raised it. Medium confidence; one model's catch the other missed, or a possible false positive.
-- **Conflicting** — the critics disagree (one says a section is fine, the other says it's broken). Cannot be auto-resolved.
+- **Corroborated** — two or more critics raised it. High confidence; almost certainly real. Corroboration **across model families** (codex agreeing with A or B) is the strongest signal the panel produces — two instances of one family can share a blind spot, and can share a hallucination.
+- **Single-critic-only** — one critic raised it. Medium confidence; a catch the others missed, or a possible false positive. A codex-only finding sits here too, and is worth reading closely: catching what the other family cannot see is the reason the leg exists.
+- **Conflicting** — the critics disagree (one says a section is fine, another says it's broken). Cannot be auto-resolved.
 
 The Workflow tool returns a **structured `recommendations` object** (the synthesizer's schema-validated output) with:
 
 - `summary` — total findings, how many corroborated, overall launch-readiness,
 - `edits` — priority-ordered concrete spec edits, each with `classification`, `severity` (BLOCKER / HIGH / MEDIUM / LOW), `currentText`, `replacementText`, `rationale`, `applicable`,
 - `openQuestions` — findings whose right answer depends on product intent, not spec quality,
-- `conflicts` — findings the two critics disagree on,
-- `triage` — the full classification table, plus a `confidenceNote`.
+- `conflicts` — findings the critics disagree on (`criticCPosition` is present only when the codex leg took a side),
+- `triage` — the full classification table (`criticC` filled only when the codex leg ran), plus a `confidenceNote`.
+
+Alongside `recommendations`, the workflow returns `codexLeg`: `"ran"` or `"unavailable"`.
 
 (The synthesizer also emits an ```` ```anvil-spec-recommendations ```` fenced block in its own transcript, but what YOU receive from the Workflow tool is the structured object — render from that.)
 
 ## What you report
 
-Render the object as a single ```` ```anvil-spec-recommendations ```` fenced block with these sections, in order: **Summary**, **Recommended Edits**, **Open Questions**, **Conflicts**, **Findings Triage** (table), **Confidence Note**. Show it to the user, then add a short plain-language summary on top: how many corroborated findings, the highest severity present, and whether any conflicts or open questions exist.
+Render the object as a single ```` ```anvil-spec-recommendations ```` fenced block with these sections, in order: **Summary**, **Recommended Edits**, **Open Questions**, **Conflicts**, **Findings Triage** (table), **Confidence Note**. Show it to the user, then add a short plain-language summary on top: how many corroborated findings, the highest severity present, whether any conflicts or open questions exist, and **whether the codex leg ran** — say so plainly when it didn't, because the panel was two same-family critics and the corroboration is weaker than it looks.
 
 Do **not** apply edits yourself. Recommendations are proposals; `/anvil:adjudicate` is the only surface that writes the spec.
 

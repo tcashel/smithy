@@ -38,21 +38,33 @@ it governs **both directions**:
 Read the sidecar after the pipeline returns. The exit code is a hint; the result event
 is the verdict.
 
-## 3. Two critics plus a synthesizer beats one — and beats N
+## 3. A panel plus a synthesizer beats one critic — and a second model family beats a second instance
 
 One critic gives you a single opinion with no way to weigh it. The value is not more
-findings; it is **triage by agreement**. Run two independent critics, then a synthesizer
+findings; it is **triage by agreement**. Run independent critics, then a synthesizer
 that buckets every finding into:
 
-- **Corroborated** — both critics raised it. Highest confidence; act first.
+- **Corroborated** — two or more critics raised it. Highest confidence; act first.
 - **Single** — only one critic raised it. Real but unweighted; judge on merits.
 - **Conflicting** — the critics disagree. Surface the tension for the human, don't
   silently pick a side.
 
-That corroborated/single/conflicting split is the entire payoff. Going past two critics
-was deferred as diminishing returns: the third opinion rarely changes a bucket, and it
-costs a full pass plus more synthesis surface. Two is the floor that produces signal and
-the ceiling that's worth paying for — revisit only if synthesis quality visibly dips.
+That corroborated/single/conflicting split is the entire payoff, and two same-family
+critics are the floor that produces it. What moved the ceiling was not a third *opinion*
+but a third **model family**: `plan-critique-improve.js` now runs a third leg that hands
+the same critique prompt to the `codex` CLI
+(`codex exec --sandbox read-only`) and relays its findings back in the same contract.
+Two instances of one model share blind spots — and share hallucinations — so their
+agreement is weaker evidence than it looks. Agreement across families cannot arrive by
+that route, which makes it the strongest signal the panel produces.
+
+This is not a hunch. The codex leg caught merge-blocking defects in four consecutive
+drover rounds, findings the same-family critics did not raise. That is why it is wired
+into the workflow as structure rather than left as tribal knowledge the operator has to
+remember to run by hand. It stays strictly optional: when `codex` is absent or the
+invocation fails, the leg reports itself unavailable — it never fabricates a third
+opinion — and the panel degrades to exactly the two-critic behavior above. Going past
+three is still diminishing returns.
 
 ## 4. The atom stops at a draft PR
 
