@@ -48,6 +48,24 @@ export const meta = {
 // Never a second round, never a merge (LEARNINGS §4).
 const AUTO_FIX_ROUNDS = 1;
 
+// ── Builder permission mode ───────────────────────────────────────────────────
+// The implement stage spawns a headless `claude` builder. Two modes, selected by
+// the `builderPermissions` arg (see normalizeArgs / parseBuilderPermissions):
+//
+//   "skip"    DEFAULT, and the historical behavior. The builder is spawned with
+//             --dangerously-skip-permissions, which is the only way an unattended
+//             run can edit files, run the quality gate, and commit — nobody is
+//             watching to answer a prompt. Claude Code's safety classifier will
+//             REFUSE this spawn unless the operator explicitly approved
+//             permission-skipping; /anvil:dispatch confirms that consent BEFORE
+//             invoking this workflow.
+//   "inherit" The flag is omitted and the builder runs under whatever permissions
+//             the environment already grants. TRADEOFF: a headless run cannot
+//             answer a permission prompt, so every gated action fails outright
+//             unless the environment pre-authorized it. Suited to sandboxes,
+//             containers, and pre-authorized settings — where the ENVIRONMENT,
+//             not a human at a keyboard, is the thing granting permission.
+
 // ── Bash recipe shared across atoms ───────────────────────────────────────────
 // These string constants are embedded verbatim into the implementing agent's
 // prompt so the agent runs the EXACT real stream-json invocation Forge uses
@@ -68,8 +86,12 @@ const CLAUDE_STREAM_FILTER =
 //
 // The pipeline, under `set -uo pipefail`:
 //   claude --print --output-format stream-json --verbose
-//          --dangerously-skip-permissions --model <m> < promptFile
+//          [--dangerously-skip-permissions] --model <m> < promptFile
 //     | tee sidecar | <filter>
+//
+// {{PERMISSION_FLAG}} is " --dangerously-skip-permissions" in the default "skip"
+// mode and EMPTY in "inherit" mode, so the default substitution reproduces the
+// invocation byte for byte.
 //
 // CRUCIAL (PR #64): pipefail makes the pipeline exit code unreliable — a
 // downstream filter or SIGPIPE can mask a real success, and a truncated stream
@@ -86,7 +108,7 @@ export LANG="\${LANG:-en_US.UTF-8}"
 # Force-fresh sidecar so a stale prior result can never be mistaken for this run.
 : > "{{SIDECAR}}"
 
-claude --print --output-format stream-json --verbose --dangerously-skip-permissions \\
+claude --print --output-format stream-json --verbose{{PERMISSION_FLAG}} \\
   --model "{{MODEL}}" < "{{PROMPT_FILE}}" \\
   | tee "{{SIDECAR}}" \\
   | ${CLAUDE_STREAM_FILTER}
@@ -247,12 +269,17 @@ with citations), ## What I Verified, ## What I Skipped. Emit nothing after the b
 const stage = (title, fn) => fn;
 
 {
-  const ids = parseIds(args);
+  const parsedArgs = normalizeArgs(args);
+  const ids = parseIds(parsedArgs);
+  const builderPermissions = parseBuilderPermissions(parsedArgs);
   if (ids.length === 0) {
-    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...]");
+    log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...] , or the object form {\"ids\":[\"<id>\"],\"builderPermissions\":\"skip\"|\"inherit\"}");
     return { atoms: [] };
   }
   log(`execute-review-fix: ${ids.length} issue(s): ${ids.join(", ")}`);
+  if (builderPermissions !== "skip") {
+    log(`builder permission mode: ${builderPermissions} — the headless builder omits --dangerously-skip-permissions and will FAIL on any action this environment has not already authorized.`);
+  }
 
   // Each item is one atom. `pipeline` runs items independently so a confused
   // agent on one spec (LEARNINGS §1) doesn't abort the rest of the batch.
@@ -275,7 +302,7 @@ const stage = (title, fn) => fn;
       if (item.ready === false) {
         return { ...item, status: "skipped", note: item.note ?? "spec not resolvable" };
       }
-      const r = await agent(implementPrompt(item), {
+      const r = await agent(implementPrompt(item, builderPermissions), {
         schema: implementSchema,
         phase: "implement",
         label: `implement:${item.id}`,
@@ -357,7 +384,7 @@ const stage = (title, fn) => fn;
   for (const a of (atoms || []).filter(Boolean)) {
     log(`  ${a.id}: status=${a.status ?? "unknown"} pr=${a.prUrl ?? "—"} verdict=${a.review?.verdict ?? "—"}`);
   }
-  return { atoms };
+  return { builderPermissions, atoms };
 }
 
 // ── Review helper: prefer the anvil-reviewer subagent, degrade gracefully ─────
@@ -416,11 +443,13 @@ missing, empty, or the repo path can't be resolved.`;
 }
 
 // ── Stage 2: implement (headless, result-event-trusted) ───────────────────────
-function implementPrompt(item) {
+function implementPrompt(item, builderPermissions) {
   // The spec snapshot doubles as the agent's prompt file. We build the exact
   // headless recipe with this item's paths substituted, then have the agent run
   // it and report the sidecar verdict — NOT the pipe exit.
-  const recipe = IMPLEMENT_RECIPE.replaceAll("{{SIDECAR}}", `$HOME/.anvil/runs/${item.id}/agent.stream.jsonl`)
+  const permissionFlag = builderPermissions === "inherit" ? "" : " --dangerously-skip-permissions";
+  const recipe = IMPLEMENT_RECIPE.replaceAll("{{PERMISSION_FLAG}}", permissionFlag)
+    .replaceAll("{{SIDECAR}}", `$HOME/.anvil/runs/${item.id}/agent.stream.jsonl`)
     .replaceAll("{{PROMPT_FILE}}", `$HOME/.anvil/runs/${item.id}/agent-prompt.txt`)
     .replaceAll("{{MODEL}}", "${ANVIL_IMPLEMENT_MODEL:-claude-sonnet-4-6}")
     .replaceAll("{{WORKTREE}}", item.worktree || `$HOME/.anvil/runs/${item.id}/worktree`)
@@ -544,6 +573,31 @@ ${(item.review?.findings || [])
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// args arrives in one of three shapes: the historical space/comma-separated id
+// string ("bd-a1b2 bd-c3d4"), an array of ids, or the object form
+// { ids: [...], builderPermissions: "skip" | "inherit" }. The Workflow tool may
+// hand that object through as a JSON string, so parse that too. A bd id can
+// never start with "{", so the historical string form is untouched.
+function normalizeArgs(args) {
+  if (typeof args === "string" && args.trim().startsWith("{")) {
+    try {
+      return JSON.parse(args);
+    } catch (e) { /* not JSON after all — fall through and treat it as an id string */ }
+  }
+  return args;
+}
+
+// Default "skip" — the historical behavior. An unrecognized value also falls back
+// to "skip": a typo must not silently strand the builder on permission prompts
+// that no one is there to answer.
+function parseBuilderPermissions(args) {
+  if (args && typeof args === "object" && !Array.isArray(args) && args.builderPermissions) {
+    return String(args.builderPermissions).trim().toLowerCase() === "inherit" ? "inherit" : "skip";
+  }
+  return "skip";
+}
+
 function parseIds(args) {
   if (Array.isArray(args)) return args.map(String).map((s) => s.trim()).filter(Boolean);
   if (typeof args === "string") return args.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);

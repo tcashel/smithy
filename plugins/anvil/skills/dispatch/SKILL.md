@@ -64,7 +64,47 @@ agent sees — not this conversation, not the repo's CLAUDE.md. If the spec is t
 the build will be confused; that is an adjudication problem, not something to paper
 over here.
 
-### 3. Run the execution loop (headless, via the Workflow tool)
+### 3. Confirm consent for the permissionless headless builder
+
+The workflow's **implement** stage spawns a builder of its own:
+
+```
+claude --print --dangerously-skip-permissions --model … < prompt
+```
+
+That flag is what lets an unattended builder edit files, run the gate, and commit —
+nobody is watching to answer a prompt. It is also exactly the spawn a safety
+classifier refuses when it cannot see that a human asked for it, and **a bare
+"dispatch" from the operator is not that approval.** Get it explicitly, before you
+invoke the workflow:
+
+- **Ask plainly.** "The builder runs headless with `--dangerously-skip-permissions`
+  in a disposable worktree outside the repo — approve?" Do not launch until the
+  operator has answered in this session, or you can cite a standing approval.
+- **A recorded standing approval counts**, and once per operator is enough — cite
+  where it came from rather than re-asking every run (e.g. *"Tripp approved
+  permissionless headless builders on 2026-08-08"*). Citing a real approval is
+  honest; inventing one is not.
+- **If the operator declines**, do not quietly reach for another builder. Offer
+  `builderPermissions: "inherit"` (step 4) and be straight about the tradeoff: a
+  headless run under default permissions cannot answer a prompt, so it fails on the
+  first gated action unless the environment already authorizes it.
+
+**The failure mode, and the only correct recovery.** Launch without that consent and
+the classifier blocks the spawn: the implement stage fails after `resolve` has
+already cut a worktree and spent a turn. When that happens:
+
+1. Get the explicit approval you skipped.
+2. **Resume the SAME run.** Invoke the Workflow tool again with `resumeFromRunId`
+   set to the blocked run's id. Stages that already completed replay from cache;
+   only the blocked implement stage actually re-runs.
+3. Do **not** start a fresh run — it redoes `resolve` and can strand a second
+   worktree. Do **not** substitute a different builder mechanism: the recipe in the
+   workflow is load-bearing (it trusts the terminal result event, not the exit
+   code — LEARNINGS §2), and swapping it out to dodge a consent prompt trades a
+   one-question fix for a silent-failure class.
+
+### 4. Run the execution loop (headless, via the Workflow tool)
 
 First resolve the bundled workflow's absolute path (**`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text**):
 
@@ -78,10 +118,22 @@ echo "$WF"
 (`/anvil:setup` persists `ANVIL_PLUGIN_ROOT`; the `find` is the fallback.) Then invoke the Workflow tool with:
 
 - **scriptPath:** the resolved absolute path (the value of `$WF`)
-- **args:** the chosen ready issue id(s), space-separated. The workflow resolves
-  each id's spec body from `~/.anvil/specs/<id>.md`; it does NOT read the
-  frontier itself — reading `bd ready` and passing only ready ids is THIS
-  skill's job (step 1).
+- **args:** either shape — the workflow accepts both:
+  - **id string** (the default, and what you want almost always): the chosen ready
+    issue id(s), space- or comma-separated — `bd-a1b2 bd-c3d4`.
+  - **object form**, when you need to set the builder's permission mode:
+    `{"ids": ["bd-a1b2", "bd-c3d4"], "builderPermissions": "skip"}`.
+    `ids` is the same list; `builderPermissions` is `"skip"` (default — the
+    `--dangerously-skip-permissions` builder of step 3) or `"inherit"`, which omits
+    the flag so the builder runs under the environment's own permissions. Use
+    `"inherit"` only where the environment is what grants permission — a sandbox, a
+    container, pre-authorized settings — because a headless builder cannot answer a
+    prompt and will simply fail on anything gated. Anything other than `"inherit"`
+    is treated as `"skip"`.
+
+  The workflow resolves each id's spec body from `~/.anvil/specs/<id>.md`; it does
+  NOT read the frontier itself — reading `bd ready` and passing only ready ids is
+  THIS skill's job (step 1).
 
 For each issue the workflow runs the **atom**, and you do not babysit it:
 
@@ -104,7 +156,7 @@ For each issue the workflow runs the **atom**, and you do not babysit it:
 
 Then it stops at the draft PR. No auto-merge, ever.
 
-### 4. Report and update beads
+### 5. Report and update beads
 
 When the workflow returns, for each issue report: the draft PR url, the gate
 result, the reviewer's top findings by severity, and whether the fix round ran.
@@ -117,6 +169,9 @@ Then hand back to the operator: **adjudicate the draft PR.** Merging is theirs.
 
 - **Never shell out to `forge`.** Use only `claude` (headless, via the workflow),
   `gh`, `bd`/`br`, `git`, and the Workflow tool.
+- **Never launch the permissionless builder without explicit consent** (step 3).
+  If a run is blocked for want of it, get the approval and resume that same run —
+  never work around the classifier.
 - **Zero repo imposition.** All beads/spec state stays under `$BEADS_DIR` and
   `~/.anvil/specs`. Never commit a `.beads` file into the target repo, never edit
   the repo's CLAUDE.md or settings, never require a per-worktree committed file.
