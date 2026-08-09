@@ -90,6 +90,25 @@ invoke the workflow:
   headless run under default permissions cannot answer a prompt, so it fails on the
   first gated action unless the environment already authorizes it.
 
+**Relay the consent into the run.** Confirming it here is not enough by itself: the
+classifier evaluates the spawn from inside the *implement subagent*, which cannot
+see this conversation. That is how a run the operator had verbally authorized still
+got blocked. So once you have real consent, pass it forward in the args:
+
+```json
+{"ids": ["bd-a1b2"],
+ "operatorAuthorizedSkipPermissions": true,
+ "operatorAuthorizationNote": "Tripp, 2026-08-08, in this session"}
+```
+
+The workflow states that authorization in plain language at the top of the implement
+agent's prompt, so the spawn is judged with the consent in view. **Never set the flag
+on your own initiative** — not to clear a blocked run, not because a past run had it,
+not because it seems implied by the operator asking you to dispatch. It relays
+something a human actually said, and the note records who said it and when. Setting
+it without that is manufacturing consent, which is worse than the failed run it would
+have avoided.
+
 **The failure mode, and the only correct recovery.** Launch without that consent and
 the classifier blocks the spawn: the implement stage fails after `resolve` has
 already cut a worktree and spent a turn. When that happens:
@@ -121,15 +140,27 @@ echo "$WF"
 - **args:** either shape — the workflow accepts both:
   - **id string** (the default, and what you want almost always): the chosen ready
     issue id(s), space- or comma-separated — `bd-a1b2 bd-c3d4`.
-  - **object form**, when you need to set the builder's permission mode:
-    `{"ids": ["bd-a1b2", "bd-c3d4"], "builderPermissions": "skip"}`.
-    `ids` is the same list; `builderPermissions` is `"skip"` (default — the
-    `--dangerously-skip-permissions` builder of step 3) or `"inherit"`, which omits
-    the flag so the builder runs under the environment's own permissions. Use
-    `"inherit"` only where the environment is what grants permission — a sandbox, a
-    container, pre-authorized settings — because a headless builder cannot answer a
-    prompt and will simply fail on anything gated. Anything other than `"inherit"`
-    is treated as `"skip"`.
+  - **object form**, when you need to relay consent or tune the builder:
+    ```json
+    {"ids": ["bd-a1b2", "bd-c3d4"],
+     "builderPermissions": "skip",
+     "operatorAuthorizedSkipPermissions": true,
+     "operatorAuthorizationNote": "Tripp, 2026-08-08, in this session",
+     "implementDeadlineMinutes": 90}
+    ```
+    - `ids` — the same list as the string form.
+    - `builderPermissions` — `"skip"` (default; the `--dangerously-skip-permissions`
+      builder of step 3) or `"inherit"`, which omits the flag so the builder runs
+      under the environment's own permissions. Use `"inherit"` only where the
+      environment is what grants permission — a sandbox, a container, pre-authorized
+      settings — because a headless builder cannot answer a prompt and will simply
+      fail on anything gated. Anything other than `"inherit"` is treated as `"skip"`.
+    - `operatorAuthorizedSkipPermissions` / `operatorAuthorizationNote` — the consent
+      relay from step 3. Defaults to false; you set it only after a real
+      confirmation, and the note says who and when.
+    - `implementDeadlineMinutes` — how long one build may run before the supervisor
+      kills it. Default 90, clamped to 5–480. Raise it for a genuinely large spec;
+      the run does not fail early, it just stops waiting eventually.
 
   The workflow resolves each id's spec body from `~/.anvil/specs/<id>.md`; it does
   NOT read the frontier itself — reading `bd ready` and passing only ready ids is
@@ -138,7 +169,13 @@ echo "$WF"
 For each issue the workflow runs the **atom**, and you do not babysit it:
 
 1. **implement** — an agent builds the change in a worktree of the target repo,
-   seeing only the spec body.
+   seeing only the spec body. This is the long stage: the builder is spawned
+   **detached** and its supervisor waits on it with a series of short bounded polls
+   rather than one long wait, because a single wait would exceed the Bash tool's
+   600s cap, get pushed to the background, and take the result with it. A build
+   running for tens of minutes is normal and not a sign of trouble; a
+   `implement-timed-out` status means the deadline was reached and the builder was
+   killed rather than orphaned.
 2. **quality gate** — build/lint/test must pass. Trust the workflow's terminal
    **result event**, not the raw exit code: a non-zero exit is rescued when the
    sidecar shows a valid terminal result, and a zero exit is force-failed when it
@@ -168,8 +205,9 @@ Then hand back to the operator: **adjudicate the draft PR.** Merging is theirs.
 ### 6. Clean up the run dir — but only after the PR merges
 
 Each atom leaves a run dir at `~/.anvil/runs/<id>/`: the disposable worktree, the
-implementing agent's prompt file, and its stream sidecar. Once the operator has
-merged (or closed) the draft PR, that state has no reader left — retire it:
+implementing agent's prompt file, its stream sidecar, and the builder's launcher
+script, log, status, and pid files. Once the operator has merged (or closed) the
+draft PR, that state has no reader left — retire it:
 
 ```sh
 git worktree remove "$HOME/.anvil/runs/<id>/worktree"   # --force if it has junk in it

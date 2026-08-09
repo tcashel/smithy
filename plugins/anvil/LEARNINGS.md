@@ -146,3 +146,32 @@ question becomes an agent guessing in the dark and a wasted draft PR. Resolve or
 explicitly defer every open question, then lock the spec into a bd issue. Only locked
 specs reach `bd ready`; only `bd ready` issues feed the loop. The gate is what keeps
 ambiguity from ever reaching an implementing agent.
+
+## 10. Supervising a long job needs a wait LOOP, not a wait
+
+A build takes tens of minutes. A supervising agent's Bash tool caps a single call at
+600 seconds. Those two facts are irreconcilable in one command, and pretending
+otherwise is a structural bug rather than a tuning problem: the call is moved to the
+background, the agent loses sight of the result it was created to report, and the
+detached job is reaped along with the process tree. Drover run `wf_e55e6310-302` died
+exactly this way — a single foreground `until grep -q IMPLEMENT_OK; do sleep 10; done`,
+then a builder killed ~14 minutes in having only run `bun add`, and an agent that
+(correctly) refused to invent a verdict it could no longer see.
+
+Three rules follow, and they compose:
+
+- **Spawn detached, and own the PID.** `nohup` (plus `setsid` where it exists) so a
+  process-group kill aimed at the supervising shell cannot reap the job; write the PID
+  down so it can be killed deliberately later. Detachment without a recorded PID just
+  trades a dead job for an orphaned one.
+- **Wait in bounded polls across many tool calls.** Each call self-bounds well under
+  the cap and returns; the LOOP does the waiting. Print progress on every poll — event
+  count, commits, whether the PID is still alive — so the next iteration is a decision
+  rather than a blind repeat. Never end the turn while the job runs.
+- **Have a deadline, and kill at it.** An orphan burning tokens in a worktree nobody
+  is watching is worse than an honest failure. Report the timeout as its own outcome:
+  "killed at the deadline" and "ran and failed" call for different fixes.
+
+The general form: an agent supervising anything longer than its own tool timeout needs
+a detached job, a durable status file, a poll loop, and a kill path. Any one of those
+missing and "don't watch" becomes "can't tell".
