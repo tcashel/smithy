@@ -1,6 +1,6 @@
 ---
 name: plan
-description: "Activates when the operator wants to turn an idea — or a plan-mode plan they just produced — into a locked anvil spec. Collaborate in plan mode to draft a self-contained spec in the anvil schema, write the body to ~/.anvil/specs/<id>.md, create a matching beads issue so it joins the ready-frontier, and enforce the open-questions lock gate before it can be marked ready. Use when the operator says they want to run something through anvil, when they've just produced a plan to ship to a coding agent, or when they invoke /anvil:plan."
+description: "Activates when the operator wants to turn an idea — or a plan-mode plan they just produced — into a locked anvil spec, or into an epic (plan map + wave-1 specs + blocked stubs) when the work is too big for one reviewable PR. Collaborate in plan mode to draft, write bodies to ~/.anvil/specs/<id>.md, create matching beads issues (with dependency edges for an epic) so work joins the ready-frontier, and enforce the open-questions lock gate. Use when the operator says they want to run something through anvil, when they've just produced a plan to ship to a coding agent, or when they invoke /anvil:plan."
 ---
 
 # /anvil:plan
@@ -36,7 +36,7 @@ In both cases the operator expects, at the end, a spec file on disk and a matchi
 
 ## Workflow
 
-You progress through four short phases. Each has a companion file (`research.md`, `schema.md`, `checklist.md`) you `read` only when you reach it — don't pull them all up front. They live in this skill's own directory. **`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text**, so resolve the directory at runtime:
+You progress through four short phases. Each has a companion file (`research.md`, `schema.md`, `epic.md`, `checklist.md`) you `read` only when you reach it — don't pull them all up front. They live in this skill's own directory. **`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text**, so resolve the directory at runtime:
 
 ```bash
 PLAN_DIR="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/skills/plan}"
@@ -51,9 +51,22 @@ Read `research.md` before exploring. Use `read`, `grep`, `find`, and read-only `
 
 If the operator already produced a concrete plan-mode plan that names files, glance at those files to confirm they exist and the diff target is what the plan assumed — then move on. Report what you found in the conversation and let the operator catch wrong assumptions before they get baked in.
 
-### Phase 2 — Draft (collaborate in plan mode)
+### Phase 2 — Choose the altitude, then draft (collaborate in plan mode)
 
-Read `schema.md`. It defines the section structure and what good vs. bad content looks like in each. Draft the spec body **collaboratively in plan mode** — propose the spec, let the operator react, refine. Compose the body in your reply; do not add YAML frontmatter and do not wrap the whole thing in a fenced block. Aim for under 200 lines unless the change is genuinely large.
+First decide the **path**: single spec or epic. Read `epic.md` for the heuristics,
+state your call in one line with the reason, and let the operator confirm.
+**Single spec on any doubt** — the current loop produces great work, and the epic
+path must be earned by real structure (multiple dependent slices, seam contracts
+worth adjudicating), never picked for ceremony.
+
+**Epic path:** draft the PLAN MAP instead of a spec — goal, cut lines, seam
+contracts, waves, assumption ledger, per `epic.md`'s schema. The load-bearing
+planning is the cut and the contracts: adjudicating those once beats adjudicating
+ten micro-specs later. Only wave-1 slices get full specs now; everything
+downstream becomes a stub. Then continue with Phase 3/4 below (the epic variant
+of the lock is in `epic.md` + Phase 4's note).
+
+**Single-spec path:** read `schema.md`. It defines the section structure and what good vs. bad content looks like in each. Draft the spec body **collaboratively in plan mode** — propose the spec, let the operator react, refine. Compose the body in your reply; do not add YAML frontmatter and do not wrap the whole thing in a fenced block. Aim for under 200 lines unless the change is genuinely large.
 
 The schema (mirrors the Forge spec contract exactly):
 
@@ -121,11 +134,28 @@ Notes on the bd step:
 - The exact `bd`/`br` subcommands and flags vary by binary version. If `--json` or a flag isn't supported, fall back to the plain form and parse the human output for the id; the contract is only "an issue exists whose body is the spec file, and it is ready iff there are no open questions."
 - If you filed the issue **blocked** because open questions remain, tell the operator exactly which questions block it and that it will not appear in `bd ready` until they're resolved.
 
+**Epic variant of the lock.** Same primitives, more issues:
+
+1. Create the EPIC issue first (title from the plan map's H1; description's first
+   line is `kind: epic`, plus an `anvil-epic` label if bd supports labels). Write
+   the plan map to `~/.anvil/specs/<epic-id>.md`.
+2. Create each child issue; write wave-1 children FULL specs (normal schema) and
+   downstream children STUBS with `- [ ] ASSUMES:` ledgers (per `epic.md`).
+3. Wire the graph: each downstream child **blocked by** the upstream slices it
+   consumes; the epic **blocked by every child**. The exact dep verb varies by bd
+   version — the contract is that `bd ready` surfaces children in wave order and
+   the epic goes ready only when all children are done.
+4. The gate applies per issue: wave-1 children go ready iff their specs have no
+   open `- [ ]`; stubs stay blocked by their ASSUMES items BY DESIGN — never
+   "resolve" an ASSUMES item to force a stub ready; the replan checkpoint does
+   that against merged reality.
+
 After locking, surface to the operator:
 
-- the **issue id**,
+- the **issue id** (and for an epic: child ids grouped by wave),
 - the **spec path** (`~/.anvil/specs/<id>.md`),
-- whether it is **ready** or **blocked on open questions** (and which ones).
+- whether it is **ready** or **blocked on open questions** (and which ones; for
+  an epic, stubs blocked on ASSUMES are the expected steady state, not a problem).
 
 ## Next step
 
