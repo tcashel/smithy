@@ -105,7 +105,15 @@ fallback. When you add a skill that needs a bundled file, follow that pattern â€
 ```bash
 claude plugin validate .                 # marketplace + plugin manifests
 node --check plugins/anvil/workflows/*.js # JS syntax (necessary, not sufficient)
+bash scripts/validate.sh                 # everything CI runs, locally
 ```
+
+CI (`.github/workflows/validate.yml`) runs `scripts/validate.sh` on every PR
+and push to main: JSON manifests, workflow-JS syntax **and** the
+forbidden-runtime-token rule (`Date.now(`/`new Date(`/`Math.random(` outside
+comments), skill/agent frontmatter, and `sh -n` over watch-epic's extracted
+tick template. `claude plugin validate .` cannot run on CI runners (no Claude
+Code CLI) â€” keep running it locally.
 
 Frontmatter conventions: skills need `name` + `description`; subagents need
 `name` + `description`, plus `tools:` to restrict (reviewers/critics are
