@@ -32,7 +32,23 @@
 //                       and stubs stay blocked)
 //     maxWaves:        3             optional, clamped 1..10
 //     implementModel:  "fable"       optional per-run override for the atoms
+//     baseBranch:      "seed"        optional: cut/reuse the integration branch from
+//                       origin/<baseBranch> and target the epic PR at it, instead of
+//                       resolving origin/HEAD. Absent → unchanged origin/HEAD behavior.
 //   }
+//
+// Boundary events. The stage agents append one line per boundary event to
+// $HOME/.anvil/runs/epic-events.log in exactly six pipe-separated fields:
+//   anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+// Emission lives in the AGENTS' shells (this runtime has no filesystem access, and
+// minting a timestamp here would break resume), it is observational and best-effort,
+// and it never changes merge policy, promotion, stop conditions, or stoppedBecause.
+// Exactly one producer per event: frontier → wave-start, stopped|no-ready-children;
+// merge → slice-merged, slice-stalled, stopped|wave-merged-zero-slices; promotion gate
+// → stub-promoted, stub-held, stopped|cut-falsified; epic-pr → epic-pr-open; setup →
+// stopped|setup-failed. The remaining stopped tokens (max-waves-reached,
+// frontier-agent-failed, epic-complete) are appended by the SESSION from the returned
+// stoppedBecause — see skills/run-epic/SKILL.md.
 
 export const meta = {
   name: "run-epic",
@@ -160,7 +176,7 @@ const EPIC_PR_SCHEMA = {
   }
 
   phase("setup");
-  const setup = await agent(setupPrompt(cfg.epicId), { schema: SETUP_SCHEMA, phase: "setup", label: `setup:${cfg.epicId}` });
+  const setup = await agent(setupPrompt(cfg.epicId, cfg.baseBranch), { schema: SETUP_SCHEMA, phase: "setup", label: `setup:${cfg.epicId}` });
   if (!setup || !setup.ok) {
     return { error: "setup-failed", note: setup?.note ?? "setup agent failed" };
   }
@@ -209,7 +225,7 @@ const EPIC_PR_SCHEMA = {
 
     let mergedCount = 0;
     if (clean.length || dirty.length) {
-      const m = await agent(mergePrompt(clean, dirty, setup), {
+      const m = await agent(mergePrompt(clean, dirty, setup, cfg.epicId), {
         schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`,
       });
       mergedCount = m?.mergedIds?.length ?? 0;
@@ -277,7 +293,7 @@ const EPIC_PR_SCHEMA = {
   // ── Epic completion: ONE draft PR, operator adjudicates ──────────────────────
   let epicPr = null;
   if (epicDone) {
-    const pr = await agent(epicPrPrompt(cfg.epicId, setup, journal), {
+    const pr = await agent(epicPrPrompt(cfg.epicId, setup, journal, cfg.baseBranch), {
       schema: EPIC_PR_SCHEMA, phase: "epic-pr", label: `epic-pr:${cfg.epicId}`,
     });
     epicPr = pr;
@@ -306,16 +322,42 @@ function parseEpicArgs(args) {
     pciScriptPath: v.pciScriptPath ? String(v.pciScriptPath).trim() : "",
     maxWaves: Number.isFinite(waves) ? Math.min(10, Math.max(1, Math.trunc(waves))) : 3,
     implementModel: v.implementModel ? String(v.implementModel).trim() : "",
+    baseBranch: v.baseBranch ? String(v.baseBranch).trim() : "",
   };
 }
 
 // ── Prompt builders ──────────────────────────────────────────────────────────
 
-function setupPrompt(epicId) {
+function setupPrompt(epicId, baseBranch) {
+  // Conditional splice (the pattern execute-review-fix's resolvePrompt uses): with no
+  // baseBranch the prompt below is byte-identical to the origin/HEAD default, so a
+  // resumed run keeps its cache.
+  const baseOverrideBlock = baseBranch
+    ? `
+
+BASE OVERRIDE. The caller pinned this epic's base to "${baseBranch}", so the CUT does not
+come from the origin/HEAD resolution:
+  - In step 3, create the integration branch from "origin/${baseBranch}" (fall back to the
+    local "${baseBranch}" if the remote ref is absent) instead of origin/<defaultBranch>.
+  - An integration branch that already exists is still reused exactly as it is.
+  - Step 2's defaultBranch is UNCHANGED — it stays the repo's real default branch, because
+    it is the branch nothing in this run may ever merge into.`
+    : "";
   return `You are the anvil run-epic setup step for epic ${epicId}. Use Bash.
 Honor the operator-scoped layout: BEADS_DIR="\${BEADS_DIR:-$HOME/.anvil/beads}" on every
 bd/br call. Never invoke the \`forge\` binary, never write into the target repo.
 
+0. EVENT LOG — do this FIRST: \`mkdir -p ~/.anvil/runs && touch ~/.anvil/runs/epic-events.log\`
+   This epic's boundary events are appended there, one line per event, in exactly six
+   pipe-separated fields:
+     anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+   Inside EVERY field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one
+   clause of at most 200 chars with no newline. Emission is observational and BEST-EFFORT:
+   if an append fails, put a warning in your note and carry on — it never changes ok, merge
+   policy, promotion, or stop conditions.
+   If ANY step below forces ok=false, emit the stop event BEFORE you return it (sliceId is
+   empty; the detail begins with the literal token setup-failed):
+     mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stopped||setup-failed; <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
 1. Read the epic: \`BEADS_DIR="$BEADS_DIR" bd show ${epicId}\` (fall back to br). Confirm its
    description marks it \`kind: epic\`; if not, STOP with ok=false — this runner only takes epics.
 2. The plan map is ~/.anvil/specs/${epicId}.md. Read it; resolve the target repo it names
@@ -328,7 +370,7 @@ bd/br call. Never invoke the \`forge\` binary, never write into the target repo.
      git -C <repoRoot> push -u origin anvil/epic-${epicId}
    If it already exists (a resumed epic), leave it exactly as it is — reuse is the point.
 4. Report ok=true with repoRoot, defaultBranch, integrationBranch, epicSpecPath, and the
-   epic's title (the plan map's H1).`;
+   epic's title (the plan map's H1).${baseOverrideBlock}`;
 }
 
 function frontierPrompt(epicId, wave) {
@@ -343,10 +385,25 @@ BEADS_DIR="\${BEADS_DIR:-$HOME/.anvil/beads}" on every bd/br call. Never invoke 
 3. epicReady=true iff EVERY child is done/closed. readyChildIds = the intersection of the
    children with \`bd ready\` output — only ids bd itself reports ready; never invent ids and
    never promote a blocked child here (that is the replan step's job, with evidence).
+4. EVENT EMISSION — observational and BEST-EFFORT; it never changes your classification.
+   One line per event, six pipe-separated fields, appended to
+   $HOME/.anvil/runs/epic-events.log:
+     anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+   You own exactly two of the epic's events, both with an EMPTY sliceId:
+   - readyChildIds NON-EMPTY → emit wave-start, whose detail is
+     \`wave <n>: <k> slice(s): <id>[, <id>…]\` with <k> = readyChildIds.length and the ids
+     that list, comma-separated:
+       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|wave-start||wave ${wave}: <k> slice(s): <id>[, <id>]\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   - readyChildIds EMPTY and epicReady false → emit the stop instead, its detail beginning
+     with the literal token no-ready-children:
+       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stopped||no-ready-children; <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   Emit NOTHING when epicReady is true — the epic-PR step owns that boundary. Inside EVERY
+   field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one clause of at
+   most 200 chars. An append failure is a warning in your note, nothing more.
 Report the classification. In note, one line per blocked child with why, if bd shows it.`;
 }
 
-function mergePrompt(clean, dirty, setup) {
+function mergePrompt(clean, dirty, setup, epicId) {
   const list = (xs) => xs.map((a) => `  - ${a.id}: PR #${a.prNumber} (${a.prUrl || "url unknown"})`).join("\n") || "  (none)";
   return `You are the anvil run-epic merge step. Use Bash (gh, git, bd). Repo: ${setup.repoRoot}
 Never invoke \`forge\`. NEVER touch ${setup.defaultBranch} — every merge below targets the
@@ -370,6 +427,21 @@ STALLED slices — gate failed, a BLOCKER/HIGH finding, or no verdict. Do NOT me
 draft PR open for the human and mark the bd issue blocked-on-human with a one-line reason
 (bd update <id> — use your version's status/note form):
 ${list(dirty)}
+
+EVENT EMISSION — observational and BEST-EFFORT; it never changes what you merge or stall.
+One line per event, six pipe-separated fields, appended to $HOME/.anvil/runs/epic-events.log:
+  anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+Emit AFTER each slice's outcome is settled, leading every line with that slice's bd id:
+  - per merged id → slice-merged, detail \`<sliceId> PR #<n> squashed into ${setup.integrationBranch}\`:
+      mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|slice-merged|<sliceId>|<sliceId> PR #<n> squashed into ${setup.integrationBranch}\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+  - per stalled id → slice-stalled, detail \`<sliceId> PR #<n> <prUrl> — <one clause>\` (an
+    event with a PR MUST carry its URL):
+      mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|slice-stalled|<sliceId>|<sliceId> PR #<n> <prUrl> - <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+  - mergedIds EMPTY → one stop event with an EMPTY sliceId, its detail beginning with the
+    literal token wave-merged-zero-slices:
+      mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stopped||wave-merged-zero-slices; <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+Inside EVERY field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one clause
+of at most 200 chars. An append failure is a warning in your note, nothing more.
 
 Report mergedIds and stalledIds exactly as executed. If a merge FAILS (conflict, CI rule),
 that slice moves to stalledIds with the error in note — never force, never retry with
@@ -423,6 +495,9 @@ origin/${setup.integrationBranch} — that is what this slice will build on). Ne
    issue — the promotion gate downstream flips it only after the critique panel comes back clean.`;
 }
 
+// The promotion gate is the SINGLE emitter of stopped|cut-falsified: the replan examiner
+// upstream is deliberately writeless, and the merge agent of the same wave runs before the
+// cut is judged. The merge agent must never emit it.
 function applyPrompt(id, epicId, setup, rec) {
   return `You are the anvil promotion gate for ${id} (epic ${epicId}). The critique panel just
 reviewed the promoted spec at ~/.anvil/specs/${id}.md. Use file tools and bash;
@@ -440,10 +515,38 @@ ${rec ? JSON.stringify(rec, null, 2).slice(0, 20000) : "(the critique workflow r
 3. If cruxCount > 0: the stub does NOT go ready. Append each crux VERBATIM to the epic plan
    map's Open Questions section (~/.anvil/specs/${epicId}.md) as \`- [ ] [${id}] <crux>\`, add a
    note on the bd issue that promotion queued cruxes, and report flippedReady=false. The
-   operator adjudicates cruxes — this gate never does.`;
+   operator adjudicates cruxes — this gate never does.
+4. EVENT EMISSION — observational and BEST-EFFORT; it never changes the promotion decision.
+   One line per event, six pipe-separated fields, appended to
+   $HOME/.anvil/runs/epic-events.log:
+     anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+   Emit exactly ONE of these for ${id}, after the decision is made, leading the detail with
+   the slice's bd id:
+   - flippedReady=true → stub-promoted, detail \`${id} promoted ready (<k> panel edit(s))\`
+     with <k> = the edits you applied:
+       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stub-promoted|${id}|${id} promoted ready (<k> panel edit(s))\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   - flippedReady=false → stub-held, detail \`${id} held — <k> crux(es) queued\` with
+     <k> = cruxCount:
+       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stub-held|${id}|${id} held - <k> crux(es) queued\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   THIS GATE IS ALSO THE ONE AND ONLY EMITTER OF stopped|cut-falsified. If you learn from the
+   replan checkpoint that the majority of examined stubs were falsified — the epic's CUT is
+   wrong — emit it once, with an EMPTY sliceId and a detail beginning with the literal token
+   cut-falsified. No other step emits this event:
+       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stopped||cut-falsified; <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   Inside EVERY field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one
+   clause of at most 200 chars. An append failure is a warning in your note, nothing more.`;
 }
 
-function epicPrPrompt(epicId, setup, journal) {
+function epicPrPrompt(epicId, setup, journal, baseBranch) {
+  // Conditional splice again: no baseBranch → the prompt is byte-identical to the
+  // origin/HEAD default and a resumed run keeps its cache.
+  const baseOverrideBlock = baseBranch
+    ? `
+
+BASE OVERRIDE. The caller pinned this epic's base to "${baseBranch}": in step 2 pass
+\`--base ${baseBranch}\` instead of \`--base ${setup.defaultBranch}\`. Everything else,
+including the never-merge rule, is unchanged.`
+    : "";
   return `You are the anvil epic-PR step for ${epicId}. Every child is done and merged into
 ${setup.integrationBranch}. Use Bash (gh, git). Repo: ${setup.repoRoot}. Never invoke \`forge\`.
 You NEVER merge — you open ONE draft PR and stop; the merge belongs to the operator.
@@ -462,5 +565,13 @@ You NEVER merge — you open ONE draft PR and stop; the merge belongs to the ope
    "## Wave journal" section containing these lines verbatim:
 ${(journal || []).map((l) => `     ${l}`).join("\n") || "     (empty journal)"}
 4. Label it (\`gh label create anvil --force\`; add the anvil label, plus anvil-epic if quick).
-5. Report the PR number and url. Do NOT mark it ready, do NOT merge.`;
+5. EVENT EMISSION — observational and BEST-EFFORT; it never changes the PR. One line, six
+   pipe-separated fields, appended to $HOME/.anvil/runs/epic-events.log:
+     anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
+   Once the draft PR exists (created or reused), emit epic-pr-open with an EMPTY sliceId and
+   the PR's URL — an event with a PR MUST carry its URL:
+     mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|epic-pr-open||draft epic PR <prUrl>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   Inside EVERY field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one
+   clause of at most 200 chars. An append failure is a warning in your note, nothing more.
+6. Report the PR number and url. Do NOT mark it ready, do NOT merge.${baseOverrideBlock}`;
 }

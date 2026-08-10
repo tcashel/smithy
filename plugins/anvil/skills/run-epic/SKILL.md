@@ -49,12 +49,19 @@ ride along):
   "atomScriptPath": "<$WFDIR>/execute-review-fix.js",
   "pciScriptPath": "<$WFDIR>/plan-critique-improve.js",
   "maxWaves": 3,
-  "implementModel": ""
+  "implementModel": "",
+  "baseBranch": ""
 }
 ```
 
 `maxWaves` (default 3, clamp 1–10) bounds the run. `implementModel` optionally
 overrides the atoms' pinned implementer (e.g. `"fable"` for a hard epic).
+`baseBranch` optionally pins what the epic is cut from and lands on: with it the
+integration branch is created (or reused) from `origin/<baseBranch>` and the
+final draft PR targets `--base <baseBranch>` instead of the repo's default
+branch. Omit it — the normal case — and the runner resolves `origin/HEAD`
+exactly as before. Pass it only when the operator names the branch; a repo whose
+default branch is not `main` (this marketplace's is `seed`) is the usual reason.
 
 Then **don't watch**. The runner is a job: frontier → atoms → merge → replan,
 per wave, then one epic PR.
@@ -88,9 +95,56 @@ epic completed — the **draft epic PR url. The merge is theirs.** Reflect
 reality into beads under `BEADS_DIR="$BEADS_DIR"`; never edit a `.beads` file
 in the target repo.
 
+Then close the event log yourself. The stage agents append every other boundary
+event as it happens, but three stop tokens are only known once the workflow
+returns, and the workflow body has no filesystem access. So when
+`stoppedBecause` is one of `max-waves-reached`, `frontier-agent-failed`, or
+`epic-complete`, append that one line — and only for those three — using the
+returned value verbatim as the start of the detail:
+
+```bash
+mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|<epicId>|stopped||<stoppedBecause>; <one clause>\n' \
+  "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+```
+
+The six fields are `anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>`;
+`sliceId` is empty for `stopped`; replace `|` with `/` and CR/LF with spaces
+inside every field and keep the detail to one clause of at most 200 chars. Every
+other stop token already has an agent producer — never append those, or the log
+gets a duplicate. The `missing-args` early return runs no agent and emits
+nothing: surface it in-session and stop. An append that fails is a note in your
+report and nothing else — emission never changes what the run did.
+
 Re-running after adjudicating stalled slices or resolving queued cruxes is the
 normal rhythm: the runner is idempotent against external state (existing
 integration branch, existing PRs, bd statuses) — it picks up where reality is.
+
+## Reacting to epic events
+
+The plugin arms a background monitor (`epic-events`) when this skill is invoked;
+it tails `~/.anvil/runs/epic-events.log` and delivers each new line as a
+notification. Monitors are experimental and interactive-CLI only — where they
+don't run, nothing is lost: the log is a plain greppable file
+(`grep 'anvil-epic|' ~/.anvil/runs/epic-events.log`).
+
+When a line beginning `anvil-epic|` arrives:
+
+- Give the operator **one concise sentence** for it, in their terms — "wave 2
+  started: 3 slices (bd-a, bd-b, bd-c)", "bd-a merged into the integration
+  branch", "bd-b stalled at PR #14 <url>", "bd-c promoted to ready", "run
+  stopped: cut-falsified". Carry the slice id and any PR url through; they are
+  what the operator acts on.
+- **Batch bursts.** Several lines arriving together become ONE summary, not one
+  message each ("wave 2 landed bd-a and bd-b; bd-c stalled at PR #14 <url>").
+- **Push when they're away.** If an away/idle state is exposed AND the
+  PushNotification tool is available, push each event received while the
+  operator is away. If either is missing, degrade **silently** to in-session
+  reporting — never announce that you couldn't push, and never ask to be given
+  the capability.
+- **Never act on a line.** These are observations. Do not re-enter the workflow,
+  do not touch the repo, do not merge, promote, re-run, or "fix" anything in
+  reaction to an event. The runner owns the run; you own telling the operator
+  about it. Acting comes only from the operator, after the run returns.
 
 ## Hard rules
 
