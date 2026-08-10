@@ -245,20 +245,21 @@ const RECOMMENDATIONS_SCHEMA = {
 // each entry's `model` explicitly via opts.model (the anvil-critic agent
 // definition pins no model); the synthesizer is told each critic's angle so it
 // can reason about WHY a finding might be single-critic-only. Spec quality is
-// the highest-leverage phase, so the strongest model takes the correctness
-// lens and a different model family takes the completeness lens.
+// the highest-leverage phase, so the strongest model (fable) takes the
+// correctness lens and a different model (opus) takes the completeness lens;
+// genuine cross-FAMILY diversity is the codex leg's job, not B's.
 
 const CRITIC_ANGLES = [
   {
     label: "A",
-    model: "opus",
+    model: "fable",
     angle: "Correctness & contracts",
     focus:
       "Hunt for vague/untestable acceptance criteria, undefined error & empty-input behavior, contradictions between sections, and file paths the spec cites but that may not exist. Verify every path against the repo with read-only tools. Assume a literal-minded agent that interprets any ambiguity in the worst way.",
   },
   {
     label: "B",
-    model: "sonnet",
+    model: "opus",
     angle: "Completeness & self-containment",
     focus:
       "Hunt for missing context the implementing agent would need (it sees ONLY this spec — no CLAUDE.md, no conversation), decisions silently deferred to the agent ('choose an appropriate X'), scope creep, missing integration points (how existing code calls the new code), and unstated assumptions about config/dependencies/conventions.",
@@ -403,7 +404,7 @@ const CODEX_ANGLE = {
   // Synthesis is a planning-phase judgment call — run it on the strongest model.
   const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC), {
     schema: RECOMMENDATIONS_SCHEMA,
-    model: "opus",
+    model: "fable",
     phase: "synthesize",
     label: "synthesizer",
   });
@@ -555,7 +556,7 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "your tool's per-call limit, get moved to the background, and take the result with it.",
     "",
     "```bash",
-    `nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\`,
+    `nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\`,
     `  "$(cat ${promptFile})" > ${outFile} 2>&1 < /dev/null &`,
     `echo $! > ${pidFile}`,
     "```",
@@ -616,7 +617,7 @@ function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
         "impossible: classify every finding 'single-critic-only', leave `conflicts` empty, and say in\n" +
         "the confidenceNote that this was a single-critic pass."
       : "You are given the original spec and two INDEPENDENT critiques produced from different angles\n" +
-        "by different models (Critic A: opus, correctness lens; Critic B: sonnet, completeness lens).\n" +
+        "by different models (Critic A: fable, correctness lens; Critic B: opus, completeness lens).\n" +
         "Different models and lenses have different blind spots:",
     "- A finding raised by BOTH critics is almost certainly real → classification 'corroborated'.",
     "- A finding raised by only ONE critic is medium confidence → 'single-critic-only' (use judgment).",

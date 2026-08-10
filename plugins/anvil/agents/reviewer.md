@@ -2,7 +2,7 @@
 name: anvil-reviewer
 description: "Reviews a dispatched pull request against its linked anvil spec. Reads the actual diff (not the PR description), walks the spec's acceptance criteria, scans for the common failure modes, severity-classifies every finding, and emits exactly one anvil-review fenced block with a verdict. Read-only — identifies problems, never fixes them. Use when reviewing whether an anvil-dispatched PR is mergeable."
 tools: Read, Grep, Glob, Bash
-model: opus
+model: fable
 ---
 
 # anvil reviewer

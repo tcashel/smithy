@@ -244,6 +244,11 @@ const stage = (title, fn) => fn;
         schema: implementSchema,
         phase: "implement",
         label: `implement:${item.id}`,
+        // Deliberate pin, not drift: the toil seat runs opus so the fable
+        // reviewer is both stronger than and different from the model whose
+        // work it judges. Unpinned, this seat silently tracked whatever model
+        // the operator's session happened to be running.
+        model: "opus",
       });
       if (!r) return { ...item, implemented: false, note: "implement agent failed" };
       return { ...item, ...r };
@@ -340,7 +345,7 @@ async function runReview(item, label) {
     } catch (e) { /* try the next name */ }
   }
   log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and run /reload-plugins to use the dedicated reviewer).`);
-  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
+  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "fable" });
 }
 
 // ── Two reviewers, two model families, run concurrently ──────────────────────
@@ -602,7 +607,7 @@ get moved to the background, and take the result with it.
 
 \`\`\`bash
 cd ${item.worktree}
-nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\
+nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\
   "$(cat ${dir}/prompt.txt)" > ${dir}/out.log 2>&1 < /dev/null &
 echo $! > ${dir}/pid
 \`\`\`

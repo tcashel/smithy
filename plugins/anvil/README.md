@@ -25,7 +25,11 @@ anvil shells out only to bare tooling — `gh`, `bd`/`br`, `git`, and `codex` fo
   - `bd` (Go/Dolt): https://github.com/gastownhall/beads
   - `br` (Rust/SQLite): https://github.com/Dicklesworthstone/beads_rust
 - **`gh`** — the GitHub CLI, authenticated (`gh auth status`). Used to open draft PRs and publish review findings.
-- **`codex`** *(optional)* — the codex CLI. When present it is the panel's third critic and the atom's second reviewer, giving cross-model-family corroboration. Absent, both legs report themselves unavailable and the rest of the pipeline is unaffected.
+- **`codex`** *(optional)* — the codex CLI. When present it is the panel's third critic and the atom's second reviewer, giving cross-model-family corroboration. Absent, both legs report themselves unavailable and the rest of the pipeline is unaffected. Both legs run `gpt-5.6-sol` at `xhigh` reasoning by default; override per run with `ANVIL_CODEX_MODEL` / `ANVIL_CODEX_EFFORT` (expanded by the shell at invocation time, so overriding never changes the agent prompts).
+
+### Model roster
+
+Judgment seats run the strongest model, toil runs a tier down, and the two seats that judge the implementer's work never share its model: critic A (correctness), the synthesizer, and `anvil-reviewer` are pinned `fable`; critic B (completeness) is `opus`; the implementing agent is pinned `opus`; the codex relay agents are `sonnet` (wire work). All Claude pins are floating aliases — never dated model IDs.
 
 ## Setup
 
