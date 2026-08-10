@@ -43,7 +43,7 @@
 export const meta = {
   name: "plan-critique-improve",
   description:
-    "A critic panel reviews a locked anvil spec in parallel — two independent critics on different angles/models, plus the codex CLI as a third leg when it is installed; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list. The spec file is left unchanged — /anvil:adjudicate is the only surface that writes a spec.",
+    "A critic panel reviews a locked anvil spec in parallel — two independent critics on different angles/models, plus the codex CLI as a third leg when it is installed; a synthesizer merges their findings into corroborated / single-critic-only / conflicting buckets with concrete replacement spec text and an Open Questions list. Pass mode:\"decomposition\" to critique an epic PLAN MAP (the findings target the cut: boundaries, seam contracts, wave order, assumption ledgers). The spec file is left unchanged — /anvil:adjudicate is the only surface that writes a spec.",
   phases: [
     { title: "load", detail: "Resolve and read the spec body (sole input)" },
     { title: "critique", detail: "Run the panel in parallel: two independent critics, plus codex when available" },
@@ -193,22 +193,25 @@ const RECOMMENDATIONS_SCHEMA = {
         required: ["question", "raisedBy", "context"],
         properties: {
           question: { type: "string" },
-          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "Critic C (codex)", "both"] },
+          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "Critic C (codex)", "both", "all three"] },
           context: { type: "string", description: "Why this matters / what hinges on the answer" },
         },
       },
     },
     conflicts: {
       type: "array",
-      description: "Findings where the two critics DISAGREE (one says fine, one says broken). LEFT for /anvil:adjudicate — never auto-applied.",
+      description: "Findings where critics DISAGREE (one says fine, another says broken) — any two members of the panel. LEFT for /anvil:adjudicate — never auto-applied.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "criticAPosition", "criticBPosition", "context"],
+        // Only title+context are required: a conflict names the positions of
+        // whichever critics actually clashed. An A-vs-C conflict legitimately
+        // has no criticBPosition — do not force the synthesizer to invent one.
+        required: ["title", "context"],
         properties: {
           title: { type: "string" },
-          criticAPosition: { type: "string" },
-          criticBPosition: { type: "string" },
+          criticAPosition: { type: "string", description: "Critic A's side, when A is party to the conflict." },
+          criticBPosition: { type: "string", description: "Critic B's side, when B is party to the conflict." },
           criticCPosition: { type: "string", description: "The codex leg's position, when it ran and took a side. Omit otherwise." },
           context: { type: "string", description: "What the human must decide to resolve it" },
         },
@@ -245,20 +248,21 @@ const RECOMMENDATIONS_SCHEMA = {
 // each entry's `model` explicitly via opts.model (the anvil-critic agent
 // definition pins no model); the synthesizer is told each critic's angle so it
 // can reason about WHY a finding might be single-critic-only. Spec quality is
-// the highest-leverage phase, so the strongest model takes the correctness
-// lens and a different model family takes the completeness lens.
+// the highest-leverage phase, so the strongest model (fable) takes the
+// correctness lens and a different model (opus) takes the completeness lens;
+// genuine cross-FAMILY diversity is the codex leg's job, not B's.
 
 const CRITIC_ANGLES = [
   {
     label: "A",
-    model: "opus",
+    model: "fable",
     angle: "Correctness & contracts",
     focus:
       "Hunt for vague/untestable acceptance criteria, undefined error & empty-input behavior, contradictions between sections, and file paths the spec cites but that may not exist. Verify every path against the repo with read-only tools. Assume a literal-minded agent that interprets any ambiguity in the worst way.",
   },
   {
     label: "B",
-    model: "sonnet",
+    model: "opus",
     angle: "Completeness & self-containment",
     focus:
       "Hunt for missing context the implementing agent would need (it sees ONLY this spec — no CLAUDE.md, no conversation), decisions silently deferred to the agent ('choose an appropriate X'), scope creep, missing integration points (how existing code calls the new code), and unstated assumptions about config/dependencies/conventions.",
@@ -283,6 +287,45 @@ const CODEX_ANGLE = {
     "Hunt for anything that would leave a competent implementer unable to finish without guessing: acceptance criteria no one could verify, cited paths that don't match what is actually in the repo, sections that contradict each other, and integration points the spec never names. You are a DIFFERENT model family from the other two critics — your worth is precisely what they cannot see, so report what you actually find rather than what you assume they already caught.",
 };
 
+// ─── Decomposition mode (epic plan maps) ────────────────────────────────────
+//
+// When args carry mode:"decomposition", the document under review is an epic
+// PLAN MAP (goal / cut lines / seam contracts / waves / assumption ledger — see
+// skills/plan/epic.md), not an implementable spec. The same panel runs with the
+// same lenses; these addenda retarget the findings at the CUT. Both are spliced
+// CONDITIONALLY so a normal critique's prompts stay byte-identical and resumed
+// runs replay from cache.
+
+const DECOMP_CRITIC_ADDENDUM = [
+  "",
+  "## DECOMPOSITION MODE — the document is an epic PLAN MAP, not an implementable spec",
+  "It carries: Goal, Cut Lines (the slices and why each boundary sits there), Seam Contracts",
+  "(interfaces between slices), Waves (execution order), and an Assumption Ledger (per-slice",
+  "ASSUMES statements to be verified against merged reality before a late slice is promoted).",
+  "Your findings target the CUT, with the same severities. Through your assigned lens, hunt for:",
+  "- WRONG BOUNDARY — two slices share hidden state or must always change together (they are one",
+  "  slice); a slice bundles two independently reviewable changes (it is two).",
+  "- MISSING/VAGUE SEAM CONTRACT — a downstream slice consumes something no contract names, or a",
+  "  contract omits the shape or invariant its consumer will actually depend on.",
+  "- NOT INDEPENDENTLY VERIFIABLE — a slice's acceptance sketch cannot be checked without a",
+  "  sibling merging first, beyond its declared dependencies.",
+  "- RISK DEFERRED — the epic's riskiest assumption is validated in a late wave instead of early.",
+  "- SIZE — a slice whose full spec would clearly bust ~200 lines (too big: split), or one that",
+  "  retires no risk and cannot fail interestingly (too small: merge it into a neighbor).",
+  "- LEDGER QUALITY — an ASSUMES statement that is not mechanically checkable against merged",
+  "  diffs, or an obvious upstream dependency with no ASSUMES entry at all.",
+  "Verify cited file paths against the repo exactly as you would for a spec.",
+];
+
+const DECOMP_SYNTH_ADDENDUM = [
+  "",
+  "DECOMPOSITION MODE: the document under review is an epic PLAN MAP. Edits' currentText and",
+  "replacementText target cut lines, seam contracts, waves, and ledger entries rather than",
+  "acceptance criteria. Open questions here are CUT-LEVEL cruxes (where a boundary belongs,",
+  "which wave carries a risk) — exactly what the operator adjudicates once, before any slice",
+  "is built.",
+];
+
 // ─── Workflow body ──────────────────────────────────────────────────────────
 // Runs at top level: agent/parallel/phase/log/args are runtime globals.
 
@@ -291,10 +334,13 @@ const CODEX_ANGLE = {
   // step already knows how to resolve, and (optionally) the repo the critics
   // verify cited paths against. The locator for a bare id/path is the trimmed
   // arg itself, exactly as before — the load prompt is unchanged.
-  const { locator: specArg, targetRepo } = parseSpecArgs(args);
+  const { locator: specArg, targetRepo, mode } = parseSpecArgs(args);
   if (!specArg) {
     log("No spec id or path provided. Usage: /anvil:critique <spec-id|path-to-spec.md>");
     return { error: "missing-spec-arg" };
+  }
+  if (mode === "decomposition") {
+    log("Decomposition mode: critiquing an epic PLAN MAP — findings target the cut, not acceptance criteria.");
   }
 
   // ── Phase 1: load the spec (the sole input) ───────────────────────────────
@@ -338,7 +384,7 @@ const CODEX_ANGLE = {
   // severity rubric, read-only rules, and output contract inline, so the
   // fallback loses polish, not the contract.
   const runCritic = async (ac) => {
-    const prompt = buildCriticPrompt(spec, ac);
+    const prompt = buildCriticPrompt(spec, ac, mode);
     const opts = { model: ac.model, schema: CRITIQUE_SCHEMA, phase: "critique", label: `critic-${ac.label}` };
     for (const agentType of ["anvil:anvil-critic", "anvil-critic"]) {
       try {
@@ -354,7 +400,7 @@ const CODEX_ANGLE = {
   // tools to run a command and read the session transcript), never on the
   // read-only anvil-critic type.
   const runCodexCritic = async () =>
-    agent(buildCodexCriticPrompt(spec, targetRepo), {
+    agent(buildCodexCriticPrompt(spec, targetRepo, mode), {
       model: "sonnet",
       schema: CODEX_CRITIQUE_SCHEMA,
       phase: "critique",
@@ -401,9 +447,9 @@ const CODEX_ANGLE = {
   log("Synthesizing critiques → corroborated / single-critic / conflicting + open questions…");
 
   // Synthesis is a planning-phase judgment call — run it on the strongest model.
-  const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC), {
+  const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC, mode), {
     schema: RECOMMENDATIONS_SCHEMA,
-    model: "opus",
+    model: "fable",
     phase: "synthesize",
     label: "synthesizer",
   });
@@ -469,14 +515,16 @@ function parseSpecArgs(args) {
     return {
       locator: String(v.specPath || v.specId || "").trim(),
       targetRepo: v.targetRepo ? String(v.targetRepo).trim() : "",
+      // Only the exact token opts in; anything else is a normal spec critique.
+      mode: v.mode === "decomposition" ? "decomposition" : "",
     };
   }
-  return { locator: (v || "").trim(), targetRepo: "" };
+  return { locator: (v || "").trim(), targetRepo: "", mode: "" };
 }
 
 // ─── Prompt builders ────────────────────────────────────────────────────────
 
-function buildCriticPrompt(spec, angleConfig) {
+function buildCriticPrompt(spec, angleConfig, mode) {
   return [
     `You are Critic ${angleConfig.label} in an adversarial review of an anvil spec.`,
     "",
@@ -488,6 +536,9 @@ function buildCriticPrompt(spec, angleConfig) {
     "",
     `## Your assigned angle: ${angleConfig.angle}`,
     angleConfig.focus,
+    // Spliced ONLY in decomposition mode so normal critiques keep the exact
+    // prompt they have always had (resume cache).
+    ...(mode === "decomposition" ? DECOMP_CRITIC_ADDENDUM : []),
     "",
     "(There is a second critic working a different angle. Do NOT try to cover their lens —",
     "stay sharp on yours so our blind spots differ. The synthesizer will merge us.)",
@@ -526,11 +577,12 @@ function buildCriticPrompt(spec, angleConfig) {
 // the CLI, recover the full message, transcribe it), wrapping the very same
 // critic prompt A and B get — that is what makes codex's findings comparable
 // rather than a differently-shaped opinion.
-function buildCodexCriticPrompt(spec, targetRepo) {
+function buildCodexCriticPrompt(spec, targetRepo, mode) {
   const dir = `$HOME/.anvil/runs/critique/${spec.specId}`;
   const promptFile = `${dir}/codex-prompt.txt`;
   const outFile = `${dir}/codex-out.log`;
   const pidFile = `${dir}/codex.pid`;
+  const lastFile = `${dir}/codex-last.txt`;
   return [
     "You are the RELAY for the critic panel's third leg. You do NOT critique the spec yourself:",
     "you hand it to the `codex` CLI — a different model family, which is the entire point — and",
@@ -555,7 +607,8 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "your tool's per-call limit, get moved to the background, and take the result with it.",
     "",
     "```bash",
-    `nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\`,
+    `nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\`,
+    `  -o ${lastFile} \\`,
     `  "$(cat ${promptFile})" > ${outFile} 2>&1 < /dev/null &`,
     `echo $! > ${pidFile}`,
     "```",
@@ -579,14 +632,13 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "outright — non-zero exit, an auth or model error, empty output — return available=false with",
     "the error text in the summary. Again: never substitute your own critique for codex's.",
     "",
-    "## 3. Recover the FULL message before you relay it",
-    "codex's terminal output can be clipped mid-message, and a clipped critique silently loses",
-    "findings. The complete text is on disk in the session transcript:",
-    "~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer. Find",
-    "the transcript for the session you just ran by matching its CONTENT to this spec (other,",
-    "unrelated codex sessions write into the same tree — do not grab one by position), then read",
-    "its last assistant message in full. Where the terminal and the transcript disagree, the",
-    "transcript wins.",
+    "## 3. Read the FULL message before you relay it",
+    `The \`-o\` flag wrote codex's complete final message to ${lastFile} — that file is`,
+    "authoritative; read it in full (the terminal log can clip mid-message, and a clipped critique",
+    "silently loses findings). FALLBACK, only if that file is missing or empty (e.g. the run was",
+    "killed): the session transcript at ~/.codex/sessions/YYYY/MM/DD/*.jsonl carries the assistant",
+    "messages. Find the session you just ran by matching its CONTENT to this spec — other, unrelated",
+    "codex sessions write into the same tree, so never grab one by position.",
     "",
     "## 4. Relay it faithfully",
     "codex has no structured-return channel — it will emit the fenced block and nothing else, so",
@@ -599,24 +651,27 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "",
     "──────────────── hand everything below this line to codex, verbatim ────────────────",
     "",
-    buildCriticPrompt(spec, CODEX_ANGLE),
+    buildCriticPrompt(spec, CODEX_ANGLE, mode),
   ].join("\n");
 }
 
-function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
+function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC, mode) {
   // "single critic" now means "fewer than two critiques came back" — with the
   // codex leg absent that is exactly the old `!critiqueA || !critiqueB`.
   const singleCritic = [critiqueA, critiqueB, critiqueC].filter(Boolean).length < 2;
   return [
     "You are the anvil Critique Synthesizer. You are a NEUTRAL mediator, not a third critic — do not",
     "add your own opinions to severity; defer to the critics.",
+    // Spliced ONLY in decomposition mode (resume cache: normal runs unchanged).
+    ...(mode === "decomposition" ? DECOMP_SYNTH_ADDENDUM : []),
     "",
     singleCritic
       ? "NOTE: one critic FAILED to return. You have only ONE critique below. Corroboration is\n" +
         "impossible: classify every finding 'single-critic-only', leave `conflicts` empty, and say in\n" +
         "the confidenceNote that this was a single-critic pass."
-      : "You are given the original spec and two INDEPENDENT critiques produced from different angles\n" +
-        "by different models (Critic A: opus, correctness lens; Critic B: sonnet, completeness lens).\n" +
+      : "You are given the original spec and the INDEPENDENT critiques below, produced from different\n" +
+        "angles by different models (Critic A: fable, correctness lens; Critic B: opus, completeness\n" +
+        "lens). Where a critique below is marked failed, weigh only those present.\n" +
         "Different models and lenses have different blind spots:",
     "- A finding raised by BOTH critics is almost certainly real → classification 'corroborated'.",
     "- A finding raised by only ONE critic is medium confidence → 'single-critic-only' (use judgment).",
@@ -636,8 +691,9 @@ function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
           "- A finding only C raised is 'single-critic-only', but that is not a lesser class: catching",
           "  what one family cannot see is exactly why the second family is here. Judge it on merits.",
           "- Fill `criticC` in every `triage` row. Use `criticCPosition` in a conflict where C took a",
-          "  side, and `raisedBy: \"Critic C (codex)\"` for an open question only C raised (`\"both\"`",
-          "  covers any question more than one critic raised).",
+          "  side (a conflict names the positions of whichever critics clashed — an A-vs-C conflict",
+          "  simply has no criticBPosition), and `raisedBy: \"Critic C (codex)\"` for an open question",
+          "  only C raised. Use \"all three\" when every critic raised it, \"both\" when exactly two did.",
           "- Say in `confidenceNote` that the codex leg RAN, and whether it corroborated A/B or",
           "  diverged from them.",
         ]

@@ -108,8 +108,9 @@ For each issue the workflow runs the **atom**, and you do not babysit it:
    MEDIUM / LOW findings, tagged by source and merged into one verdict — the more
    severe of the two wins. Findings are published to the PR with hidden
    `<!-- anvil-finding id=... -->` markers so a re-run never duplicates a comment.
-5. **one auto-fix round** — `autoFixRounds` defaults to **1**: the loop addresses the
-   merged BLOCKER/HIGH findings once, then **stops**. It does not grind.
+5. **one auto-fix round** — fixed at **one** (a constant in the workflow, not a
+   knob): the loop addresses the merged BLOCKER/HIGH findings once, then
+   **stops**. It does not grind.
 
 Then it stops at the draft PR. No auto-merge, ever.
 
@@ -142,9 +143,13 @@ it. That registration is the one trace anvil can leave in a repo it promised not
 to touch, so closing the loop here is part of zero repo imposition.
 
 **Do not clean up a failed implement.** Its worktree is deliberately kept: it holds
-whatever the builder did manage to commit, and a resumed run picks it back up.
-Delete it and a resumable run becomes a rerun. Sweep only ids whose PR is merged or
-closed, and leave anything still in flight alone.
+whatever the builder did manage to commit, and the operator may want to inspect or
+salvage that by hand. Be clear about what resume does NOT do, though: `agent()`
+results cache by (prompt, opts), so a resumed run replays the recorded *failure* —
+it does not pick the partial worktree back up and continue building. Salvage is
+manual; re-running the id is a fresh build (the resolve stage reuses the worktree
+directory if it exists). Sweep only ids whose PR is merged or closed, and leave
+anything still in flight alone.
 
 ## Hard rules
 

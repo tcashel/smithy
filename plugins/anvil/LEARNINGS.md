@@ -84,7 +84,8 @@ on.
 ## 4. The atom stops at a draft PR
 
 The execution atom is fixed: launch -> quality gate -> draft PR -> review ->
-ONE auto-fix round (`autoFixRounds` default 1) -> stop. It never auto-merges.
+ONE auto-fix round (a constant in the workflow, deliberately not a knob) -> stop.
+It never auto-merges.
 
 Sessions are jobs, not shows — "Plan. Run. Review. Ship. Don't watch." The point of
 stopping at a draft is that the human adjudicates the merge. The loop does the toil
@@ -92,6 +93,17 @@ stopping at a draft is that the human adjudicates the merge. The loop does the t
 A single auto-fix round catches the cheap review misses without letting the agent grind
 indefinitely against findings it can't resolve. More rounds invite thrash; merge
 authority stays human.
+
+**Amended for the epic path (2026-08): "never merges" means never merges to the
+DEFAULT branch.** Inside an epic, a CLEAN slice — quality gate passed, review ran, no
+BLOCKER/HIGH from either reviewer — may auto-merge into the epic's INTEGRATION branch
+(`anvil/epic-<id>`), because without that the wave loop deadlocks on a human at every
+slice and "kick it off and come back" is fiction. The integration branch is the
+autonomy boundary: wrongness lands on a branch you can delete, never on the branch
+teammates pull. The epic ends as ONE draft PR (integration → default), so the human
+adjudication the atom used to demand per slice is batched at the epic boundary — moved,
+not removed. Anything short of clean still stalls for a person, and nothing anvil runs
+ever merges to the default branch.
 
 ## 5. Structured fenced output is the extraction contract
 
@@ -225,3 +237,40 @@ can pick up ambient project context (the target repo's `CLAUDE.md`) that a bare
 `claude --print` would not have seen, so §1 gets a little weaker — the spec is still the
 sole instruction, but it is no longer the only thing in the room. That is a real trade,
 and it is worth it.
+
+## 12. Lock late — the rolling wave
+
+For a multi-slice epic, a spec locked at time zero for wave 3 is fiction with
+authority: it passes every gate a true spec passes, the critics faithfully critique
+the fiction, and the implementing agent builds against assumptions wave 1 already
+falsified. The failure mode is not vagueness (the open-questions gate catches that) —
+it is confident staleness, which the gate launders.
+
+So the epic path locks only the frontier. What IS knowable up front gets planned in
+full: the goal, the cut lines, and above all the SEAM CONTRACTS between slices —
+when contracts hold, re-speccing a late slice after reality shifts is cheap. Every
+downstream slice is a STUB whose `- [ ] ASSUMES:` ledger items state, checkably, what
+it needs from upstream; the existing lock gate holds stubs off `bd ready` with zero
+new mechanism. Between waves, a replan checkpoint verifies each ledger against the
+integration branch's actual merged diffs — evidence, not optimism; an unverifiable
+assumption counts as broken — and promotes a proven stub through the normal critique
+panel, flipping it ready only at zero cruxes. Cruxes queue for the operator; a
+majority of broken assumptions means the CUT is wrong, and recutting is a human call.
+
+The principle: **only lock what is about to be built — the lock is precious because
+it is late.** Detail written early about a late wave is a liability, not diligence:
+it will be wrong, and it will look authoritative.
+
+## 13. Sandbox asymmetry: the read-only legs get the harder cage
+
+The codex legs — critics and reviewer, the roles that must never write — run under an
+OS-enforced sandbox (`codex exec --sandbox read-only`, Seatbelt on macOS). The
+implementing agent — the role that must write — has no such cage: its containment is
+structural (a disposable worktree outside the repo, commits that only ever reach a
+draft PR or an integration branch, never the default branch). Mechanical enforcement
+where a guarantee is cheap, structural containment where capability is the point.
+That is the right way round: a critic that cannot write cannot drift into "fixing",
+and an implementer's blast radius is bounded by what its outputs are allowed to reach,
+not by pretending it doesn't need write access. When adding a new leg, pick its cage
+deliberately: read-only role → mechanical sandbox; read-write role → structural
+boundary plus human adjudication at the exit.

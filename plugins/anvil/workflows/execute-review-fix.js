@@ -40,8 +40,12 @@ export const meta = {
   description:
     "anvil execution atom: for each bd-ready issue, a subagent implements its spec in a disposable worktree, then the atom gates quality, opens a DRAFT PR, reviews it (anvil-reviewer plus codex when installed), runs one auto-fix round, and stops. Never merges.",
   phases: [
-    { title: "resolve" }, { title: "implement" }, { title: "quality" },
-    { title: "pr" }, { title: "review" }, { title: "fix" },
+    { title: "resolve", detail: "Resolve the spec + prepare a disposable worktree" },
+    { title: "implement", detail: "A subagent builds the spec in the worktree" },
+    { title: "quality", detail: "Run the spec's quality gate commands" },
+    { title: "pr", detail: "Open (or reuse) the labeled DRAFT PR" },
+    { title: "review", detail: "anvil-reviewer + codex relay, severer verdict wins" },
+    { title: "fix", detail: "ONE auto-fix round, then stop — never merge" },
   ],
 };
 
@@ -91,6 +95,7 @@ const resolveSchema = {
     branch: { type: "string" },
     defaultBranch: { type: "string" },
     baseRef: { type: "string" },
+    baseBranch: { type: "string", description: "Branch the draft PR targets. The base override when one was given; otherwise the default branch." },
     specPath: { type: "string" },
     title: { type: "string" },
     qualityCommands: { type: "array", items: { type: "string" } },
@@ -212,12 +217,13 @@ with citations), ## What I Verified, ## What I Skipped. Emit nothing after the b
 const stage = (title, fn) => fn;
 
 {
-  const ids = parseIds(args);
+  const { ids, baseRef: baseOverride, implementModel } = parseAtomArgs(args);
   if (ids.length === 0) {
     log("no bd issue ids supplied — usage: execute-review-fix <id> [<id> ...]");
     return { atoms: [] };
   }
   log(`execute-review-fix: ${ids.length} issue(s): ${ids.join(", ")}`);
+  if (baseOverride) log(`base override: atoms build on and PR against "${baseOverride}" (epic integration branch).`);
 
   // Each item is one atom. `pipeline` runs items independently so a confused
   // agent on one spec (LEARNINGS §1) doesn't abort the rest of the batch.
@@ -226,7 +232,7 @@ const stage = (title, fn) => fn;
 
     // ── Stage 1: resolve spec + prepare a disposable worktree ────────────────
     stage("resolve", async (item) => {
-      const r = await agent(resolvePrompt(item), {
+      const r = await agent(resolvePrompt(item, baseOverride), {
         schema: resolveSchema,
         phase: "resolve",
         label: `resolve:${item.id}`,
@@ -244,6 +250,12 @@ const stage = (title, fn) => fn;
         schema: implementSchema,
         phase: "implement",
         label: `implement:${item.id}`,
+        // Deliberate pin, not drift: the toil seat runs opus so the fable
+        // reviewer is both stronger than and different from the model whose
+        // work it judges. Unpinned, this seat silently tracked whatever model
+        // the operator's session happened to be running. The args override
+        // exists for hard slices (e.g. implementModel:"fable" per run).
+        model: implementModel || "opus",
       });
       if (!r) return { ...item, implemented: false, note: "implement agent failed" };
       return { ...item, ...r };
@@ -340,7 +352,7 @@ async function runReview(item, label) {
     } catch (e) { /* try the next name */ }
   }
   log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and run /reload-plugins to use the dedicated reviewer).`);
-  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
+  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "fable" });
 }
 
 // ── Two reviewers, two model families, run concurrently ──────────────────────
@@ -427,7 +439,19 @@ function severerVerdict(a, b) {
 // The spec is the SOLE input to the implementing agent (LEARNINGS §1), so we
 // resolve it from the operator-scoped store and verify it's non-empty here,
 // before spending an implement turn on a vague or missing spec.
-function resolvePrompt(item) {
+function resolvePrompt(item, baseOverride) {
+  // The override block is spliced ONLY when a base override exists, so the
+  // no-override prompt stays byte-identical (resume cache).
+  const overrideBlock = baseOverride
+    ? `
+
+BASE OVERRIDE (epic integration branch). The caller requires this atom to build on
+"${baseOverride}" instead of the default branch:
+  - In step 4, base the worktree on "origin/${baseOverride}" (after the fetch; fall
+    back to the local "${baseOverride}" if the remote ref is absent).
+  - In step 5, prefer "origin/${baseOverride}" as baseRef.
+  - Report baseBranch="${baseOverride}" so the draft PR targets it.`
+    : "";
   return `You are the anvil resolve step for bd issue ${item.id}. Use Bash.
 
 Honor the operator-scoped, out-of-repo layout. Do NOT touch the target repo's
@@ -460,7 +484,7 @@ CLAUDE.md, settings, or commit any .beads file into it.
    section, one array entry per line, verbatim.
 
 Report the resolved values. Set ready=false with a note if the spec file is
-missing, empty, or the repo path can't be resolved.`;
+missing, empty, or the repo path can't be resolved.${overrideBlock}`;
 }
 
 
@@ -532,7 +556,7 @@ Never invoke the \`forge\` binary.
    merge; anvil never auto-merges):
      gh pr create --draft \\
        --title '${(item.title || item.id).replace(/'/g, "'\\''").slice(0, 70)}' \\
-       --base ${item.defaultBranch || "main"} \\
+       --base ${item.baseBranch || item.defaultBranch || "main"} \\
        --head ${item.branch} \\
        --body "<short summary + a 'Generated by anvil for ${item.id}' line>"
 4. Apply a label so this PR is identifiable as an anvil draft. Ensure the label
@@ -553,6 +577,7 @@ PR url: ${item.prUrl}
 Gather context with gh (never the \`forge\` binary):
   - \`gh pr view ${item.prNumber} --json number,title,body,headRefName,baseRefName,additions,deletions,changedFiles,url\`
   - \`gh pr diff ${item.prNumber}\`  (cap at ~60k chars)
+  - \`gh pr checks ${item.prNumber}\`  (CI status — the verdict depends on it)
   - The linked spec body at ${item.specPath} — the diff must satisfy THIS spec.
 
 Produce your review as a single \`\`\`anvil-review fenced block with a verdict of
@@ -602,7 +627,8 @@ get moved to the background, and take the result with it.
 
 \`\`\`bash
 cd ${item.worktree}
-nohup codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort='"xhigh"' \\
+nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\
+  -o ${dir}/last.txt \\
   "$(cat ${dir}/prompt.txt)" > ${dir}/out.log 2>&1 < /dev/null &
 echo $! > ${dir}/pid
 \`\`\`
@@ -625,14 +651,14 @@ exit 0
 If it is still running after your last poll, \`kill "$PID"\` and return available=false
 with what you have — an orphan left grinding is worse than an honest gap.
 
-## 4. Recover the FULL message before you relay it
-codex's terminal output can be clipped mid-message, and a clipped review silently
-loses findings. The complete text is in the session transcript under
-~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer.
-Find the transcript for the session you just ran by matching its CONTENT to this PR
-(other, unrelated codex sessions write into the same tree — never pick one by
-position), and read its last assistant message in full. Where the terminal output and
-the transcript disagree, the transcript wins.
+## 4. Read the FULL message before you relay it
+The \`-o\` flag wrote codex's complete final message to ${dir}/last.txt — that file is
+authoritative; read it in full (the terminal log can clip mid-message, and a clipped
+review silently loses findings). FALLBACK, only if that file is missing or empty
+(e.g. the run was killed): the session transcript under
+~/.codex/sessions/YYYY/MM/DD/*.jsonl carries the assistant messages. Find the session
+you just ran by matching its CONTENT to this PR — other, unrelated codex sessions
+write into the same tree, so never pick one by position.
 
 ## 5. Relay, and publish
 Return codex's verdict and findings as codex stated them — severities included. You
@@ -669,16 +695,24 @@ ${(item.review?.findings || [])
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // args: a space/comma-separated id string ("bd-a1b2 bd-c3d4"), an array of ids,
-// or { ids: [...] }. There is nothing else to configure — the builder is a
-// subagent now, so there is no permission mode, no consent flag, and no build
-// deadline to pass through.
-function parseIds(args) {
-  if (Array.isArray(args)) return args.map(String).map((s) => s.trim()).filter(Boolean);
-  if (typeof args === "string") return args.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+// or { ids: [...], baseRef?, implementModel? }. The object extras exist for the
+// epic wave runner (run-epic.js): baseRef points every atom at an integration
+// branch instead of the default branch, and implementModel overrides the
+// implementer's pinned model for this run. Bare ids keep working unchanged —
+// and with no overrides every prompt below is byte-identical to the
+// no-override form, so resumed runs still replay from cache.
+function parseAtomArgs(args) {
+  const clean = (xs) => xs.map(String).map((s) => s.trim()).filter(Boolean);
+  if (Array.isArray(args)) return { ids: clean(args), baseRef: "", implementModel: "" };
+  if (typeof args === "string") return { ids: clean(args.split(/[\s,]+/)), baseRef: "", implementModel: "" };
   if (args && typeof args === "object" && Array.isArray(args.ids)) {
-    return args.ids.map(String).map((s) => s.trim()).filter(Boolean);
+    return {
+      ids: clean(args.ids),
+      baseRef: args.baseRef ? String(args.baseRef).trim() : "",
+      implementModel: args.implementModel ? String(args.implementModel).trim() : "",
+    };
   }
-  return [];
+  return { ids: [], baseRef: "", implementModel: "" };
 }
 
 // Collapse an item into its terminal status. The atom always STOPS at a
@@ -689,6 +723,9 @@ function finalize(item) {
   if (!status) {
     if (item.implemented === false) status = "implement-failed";
     else if (!item.prNumber) status = "no-pr";
+    // Both reviewer legs died: the draft PR exists but carries NO verdict. Say
+    // so — "ready-for-adjudication" would misread as "reviewed and waiting".
+    else if (!item.review) status = "review-failed";
     else status = "draft-pr-ready-for-adjudication";
   }
   return { ...item, status };
