@@ -89,13 +89,17 @@ One skill sets anvil up; four drive the pipeline from idea to a locked, dispatch
 
 - **`/anvil:dispatch`** — Read `bd ready` (honoring `$BEADS_DIR`) for the work-list and run the execution atom over each ready spec: an implementing subagent builds it in a disposable worktree → quality gate → **draft** PR → review by two reviewers (`anvil-reviewer`, plus a `codex` relay when it's installed; findings are tagged by source and the severer verdict wins) → one auto-fix round → stop. This is invoked via the bundled `execute-review-fix.js` workflow. The atom stops at the draft PR. You adjudicate the merge.
 
+- **`/anvil:run-epic`** — The long-horizon Run surface. Takes a locked epic (`kind: epic` — a plan map plus children wired with dependency edges) and runs it in **waves** against an integration branch `anvil/epic-<id>`: ready children go through the execution atom, **clean** slices (gate passed, no BLOCKER/HIGH from either reviewer) auto-merge into the integration branch, a replan checkpoint verifies downstream stubs' `ASSUMES` ledgers against the merged reality and promotes the proven ones through the critique panel, and the run stops fail-closed. Ends with **one draft PR** (integration branch → default branch). anvil never merges to the default branch — that adjudication is yours, batched at the epic boundary instead of per slice.
+
 ## The bundled Workflow scripts
 
 Two unattended Workflow scripts do the supervised, long-running work. Skills invoke them through the Claude Code Workflow tool with a `scriptPath` pointing at the bundled file. (`${CLAUDE_PLUGIN_ROOT}` is not usable from skill text, so the skills resolve the absolute path at runtime via `$ANVIL_PLUGIN_ROOT` — set by `/anvil:setup` — with a `find` over `~/.claude/plugins` as a fallback.)
 
 - **`workflows/plan-critique-improve.js`** — fans out the critic panel (two critics, plus the codex leg when available) and synthesizes the cruxes. It leaves the spec file **unchanged** and returns the recommendations; `/anvil:adjudicate` is the only surface that writes a spec. Backs `/anvil:critique` (and the planning loop).
 
-- **`workflows/execute-review-fix.js`** — runs the execution atom per ready spec: implement → quality gate → draft PR → review (both reviewers) → ONE auto-fix round (a constant, not a knob) → stop. Backs `/anvil:dispatch`.
+- **`workflows/execute-review-fix.js`** — runs the execution atom per ready spec: implement → quality gate → draft PR → review (both reviewers) → ONE auto-fix round (a constant, not a knob) → stop. Backs `/anvil:dispatch`, and takes `{ids, baseRef, implementModel}` args so the wave runner can point atoms at an integration branch.
+
+- **`workflows/run-epic.js`** — the wave runner: frontier → atoms → merge-clean-slices → replan, per wave, then one draft epic PR. Composes the other two workflows as children; never merges to the default branch. Backs `/anvil:run-epic`.
 
 Every stage in both scripts is a workflow **subagent** — sanctioned by your session, inheriting your permission mode, returning a schema-validated object. Neither script spawns a `claude` CLI. Each agent also emits its single tagged fenced block as the human-readable contract. When a reviewer publishes findings to a PR, each comment carries a hidden `<!-- anvil-finding id=... -->` marker so re-running never duplicates a comment.
 

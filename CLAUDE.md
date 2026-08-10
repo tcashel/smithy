@@ -38,7 +38,7 @@ from bare parts so we can find out. Two cardinal rules follow from that and
 .claude-plugin/marketplace.json     marketplace manifest (lists anvil)
 plugins/anvil/
   .claude-plugin/plugin.json        plugin manifest
-  skills/<name>/SKILL.md            setup · plan · critique · adjudicate · dispatch
+  skills/<name>/SKILL.md            setup · plan · critique · adjudicate · dispatch · run-epic
   agents/<name>.md                  anvil-critic · anvil-reviewer (subagents)
   workflows/*.js                    Claude Code Workflow scripts (see gotchas below)
   bootstrap/install-beads.sh        operator-scoped $BEADS_DIR bootstrap
@@ -48,7 +48,7 @@ plugins/anvil/
 ## Naming contract (keep these EXACT — files reference each other by them)
 
 - Skills install namespaced: `/anvil:setup`, `/anvil:plan`, `/anvil:critique`,
-  `/anvil:adjudicate`, `/anvil:dispatch`.
+  `/anvil:adjudicate`, `/anvil:dispatch`, `/anvil:run-epic`.
 - Subagents: `anvil-critic` (`agents/critic.md`), `anvil-reviewer` (`agents/reviewer.md`).
   When the plugin is installed, the registry names are NAMESPACED:
   `anvil:anvil-critic`, `anvil:anvil-reviewer`. Agents register only after
