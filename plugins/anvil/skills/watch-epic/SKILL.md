@@ -72,7 +72,12 @@ Both JSON files — written by the arm step and by the tick — use exactly one
 layout: one key per line, two-space indent, **every** value a double-quoted
 string (numbers and booleans included), no nesting, keys in the order below,
 closing `}` on its own line. That is what makes the tick's one-line `sed` reader
-correct.
+correct. String values are JSON-escaped on write (backslash and double quote —
+the only two escapes this layout can ever produce) and unescaped on read, so
+`lastStoppedDetail` and paths containing quotes or backslashes round-trip
+exactly. The tick refuses (`reinvoke-aborted`) any file that deviates from the
+frozen layout: wrong key order, duplicate, missing or unknown keys, or a value
+that is not one double-quoted string.
 
 `~/.anvil/runs/epic-<epicId>.json` — the six required keys are frozen, and
 `baseBranch` / `implementModel` are the only optional ones (present **iff** the
@@ -154,7 +159,27 @@ for b in claude bd git gh; do
 done
 SETTINGS="$HOME/.claude/settings.json"
 missing_grants=""
-have_grant() { grep -qF "\"$1\"" "$SETTINGS" 2>/dev/null; }
+# List ONLY the strings inside permissions.allow — the same spelling anywhere
+# else in settings.json (permissions.deny above all) must NOT count as a grant.
+allow_grants() {
+  awk '
+    /"permissions"[[:space:]]*:/ { inperm = 1 }
+    inperm && /"allow"[[:space:]]*:/ { inallow = 1 }
+    inallow {
+      line = $0
+      sub(/^.*"allow"[[:space:]]*:/, "", line)
+      done = index(line, "]")
+      if (done) line = substr(line, 1, done - 1)
+      while (match(line, /"([^"\\]|\\.)*"/)) {
+        print substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if (done) { inallow = 0; inperm = 0 }
+    }
+    inperm && !inallow && /}/ { inperm = 0 }
+  ' "$SETTINGS" 2>/dev/null
+}
+have_grant() { allow_grants | grep -qxF "$1"; }
 if [ -f "$SETTINGS" ]; then
   have_grant 'Bash(git *)' || missing_grants="$missing_grants Bash(git_*)"
   have_grant 'Bash(gh *)' || have_grant 'Bash(gh pr *)' || missing_grants="$missing_grants Bash(gh_pr_*)"
@@ -186,7 +211,7 @@ above only keep the marker line free of shell-hostile spacing.
 Never cron on macOS: its administration hangs on an interactive security prompt
 (proved by the P1 probe).
 
-### 3. Check the lock, then write the invocation contract
+### 3. Check the lock
 
 Re-arm and `off` both **first** check the tick lock — a tick, or the run it
 invoked, may be in flight:
@@ -209,29 +234,28 @@ Refuse to mutate **any** state or timer while the lock is live, and tell the
 operator why. A stale lock (dead recorded PID) is cleared per the tick's own
 rule, then arming proceeds. Never remove a lock whose pid cannot be read.
 
-Then write `~/.anvil/runs/epic-<epicId>.json` in the layout above, with absolute
-paths: `atomScriptPath` = `$WFDIR/execute-review-fix.js`, `pciScriptPath` =
-`$WFDIR/plan-critique-improve.js`.
+### 4. Scan the existing log and evaluate every refusal — before any write
 
-### 4. Seed the watch state from the existing log
-
-Ensure the event log exists (`mkdir -p` + `touch`), touch the watch log, then
-scan the **whole existing log** so that arming *after* a stall still sees the
-stall — while the cursor starts at end-of-file so the first tick consumes zero
-bytes:
+Scan the **whole existing log**, read-only, so that arming *after* a stall
+still sees the stall — while the cursor starts at end-of-file so the first tick
+consumes zero bytes. This step creates and writes **nothing** (not even a
+`touch`): the arm-time refusals below must leave no trace, and no state file is
+written until step 5 has seen every check pass:
 
 <!-- ANVIL-ARM-SEED-BEGIN -->
 ```sh
-# Arm-time seed scan. Run inline with EPIC_ID already set. Prints SEED_* lines.
+# Arm-time seed scan. READ-ONLY — it writes nothing and creates nothing, so a
+# refusal leaves no trace. Run inline with EPIC_ID already set. Prints SEED_*.
 : "${EPIC_ID:?set EPIC_ID first}"
 RUNS="$HOME/.anvil/runs"
 EVENTS="$RUNS/epic-events.log"
-mkdir -p "$RUNS" && touch "$EVENTS" && touch "$RUNS/epic-$EPIC_ID.watch.log"
-SEED_OFFSET=$(wc -c < "$EVENTS" | tr -d ' ')
+SEED_OFFSET=0
 SEED_LASTSTOP=""
 SEED_INFLIGHT=false
 SEED_PR_OPEN=no
 lastrunev=""
+if [ -f "$EVENTS" ]; then
+SEED_OFFSET=$(wc -c < "$EVENTS" | tr -d ' ')
 while IFS= read -r line; do
   case "$line" in anvil-epic\|*) ;; *) continue ;; esac
   case "$line" in *\|*\|*\|*\|*\|*) ;; *) continue ;; esac
@@ -252,6 +276,7 @@ while IFS= read -r line; do
     esac
   fi
 done < "$EVENTS"
+fi
 [ "$lastrunev" = "wave-start" ] && SEED_INFLIGHT=true
 case "$SEED_LASTSTOP" in cut-falsified*) SEED_CUT_FALSIFIED=yes ;; *) SEED_CUT_FALSIFIED=no ;; esac
 printf 'SEED_OFFSET=%s\nSEED_INFLIGHT=%s\nSEED_PR_OPEN=%s\nSEED_CUT_FALSIFIED=%s\nSEED_ARMED_AT=%s\nSEED_LASTSTOP=%s\n' \
@@ -259,7 +284,8 @@ printf 'SEED_OFFSET=%s\nSEED_INFLIGHT=%s\nSEED_PR_OPEN=%s\nSEED_CUT_FALSIFIED=%s
 ```
 <!-- ANVIL-ARM-SEED-END -->
 
-**Arm-time refusals** (tell the operator why, and write nothing):
+**Arm-time refusals** (tell the operator why; nothing has been written, and
+nothing may be):
 
 - `SEED_PR_OPEN=yes` — a valid `epic-pr-open` line for this epic carrying a PR
   URL. The epic is done; there is nothing to watch.
@@ -269,12 +295,30 @@ printf 'SEED_OFFSET=%s\nSEED_INFLIGHT=%s\nSEED_PR_OPEN=%s\nSEED_CUT_FALSIFIED=%s
   an old falsification superseded by a recut and later activity must not block
   arming forever.
 
-Otherwise write the watch state: `offsetBytes` = `SEED_OFFSET`,
-`reinvokeCount` 0, `consecutiveAbortCount` 0, `retired` false, `armedAt` =
-`SEED_ARMED_AT`, `runInFlight` = `SEED_INFLIGHT`, `lastStoppedDetail` =
-`SEED_LASTSTOP`.
+### 5. Only now write the state files
 
-### 5. Write the tick script
+Every refusal has passed; this is the first write of the arm. `mkdir -p`
+`~/.anvil/runs`, `touch` the event log and `epic-<epicId>.watch.log`, then
+write `~/.anvil/runs/epic-<epicId>.json` in the layout above, with absolute
+paths: `atomScriptPath` = `$WFDIR/execute-review-fix.js`, `pciScriptPath` =
+`$WFDIR/plan-critique-improve.js`.
+
+The watch state is written by exactly one of three branches — never
+unconditionally:
+
+- **New watch** (no `epic-<epicId>.watch.json`): write it fresh —
+  `offsetBytes` = `SEED_OFFSET`, `reinvokeCount` 0, `consecutiveAbortCount` 0,
+  `retired` false, `armedAt` = `SEED_ARMED_AT`, `runInFlight` =
+  `SEED_INFLIGHT`, `lastStoppedDetail` = `SEED_LASTSTOP`.
+- **Active watch** (existing state with `retired` `false`): leave the
+  watch-state file **untouched** — a re-arm preserves the counters and the
+  cursor (step 8); reseeding `reinvokeCount` or `offsetBytes` here would bypass
+  the cap and replay the log.
+- **Retired watch** (existing state with `retired` `true`): the explicit
+  re-arm is the sanctioned recovery — write it fresh exactly as for a new
+  watch, and log the reset in the watch log.
+
+### 6. Write the tick script
 
 Write `~/.anvil/runs/epic-<epicId>.tick.sh` **with the Write tool** — never a
 shell heredoc or `echo`. A heredoc would expand `$HOME`, `$$` and `$(…)` at arm
@@ -347,11 +391,63 @@ emit_expired() {
 }
 
 # --- tiny JSON helpers: one key per line, every value a quoted string --------
-jget() { sed -n 's/^  "'"$2"'": "\(.*\)"[,]\{0,1\}$/\1/p' "$1" | head -1; }
+# jesc JSON-escapes the only two structural characters this layout can carry
+# (backslash first, then double quote); jget undoes exactly those escapes on
+# read, so values round-trip byte-for-byte.
+jget() {
+  sed -n 's/^  "'"$2"'": "\(.*\)"[,]\{0,1\}$/\1/p' "$1" | head -1 | awk '{
+    out = ""; i = 1
+    while (i <= length($0)) {
+      c = substr($0, i, 1)
+      if (c == "\\" && i < length($0)) { out = out substr($0, i + 1, 1); i = i + 2 }
+      else { out = out c; i = i + 1 }
+    }
+    print out
+  }'
+}
 jhas() { grep -q '^  "'"$2"'": "' "$1" 2>/dev/null; }
-jesc() { printf '%s' "$1" | tr '"\\' "''"; }
+jesc() { printf '%s\n' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 is_bool() { case "$1" in true|false) return 0 ;; *) return 1 ;; esac; }
+
+# Frozen-layout check: "{" first, "}" alone last, exactly the given keys in the
+# given order (a leading ? marks an optional key), one key per line with a
+# two-space indent and a double-quoted value, a comma on every key line but the
+# last, and nothing else. Rejects duplicate, unknown, reordered and missing
+# keys before any value is trusted.
+jlayout() {
+  jl_file=$1; shift
+  awk -v keys="$*" '
+    BEGIN { nk = split(keys, K, " "); ki = 0 }
+    bad { next }
+    NR == 1 { if ($0 != "{") bad = 1; next }
+    $0 == "}" && !sawend { sawend = 1; if (nseen > 0 && prevcomma) bad = 1; next }
+    sawend { bad = 1; next }
+    {
+      if (nseen > 0 && !prevcomma) { bad = 1; next }
+      if ($0 !~ /^  "[A-Za-z]+": ".*"[,]?$/) { bad = 1; next }
+      key = $0
+      sub(/^  "/, "", key); sub(/": .*$/, "", key)
+      ok = 0
+      while (ki < nk) {
+        ki++
+        k = K[ki]
+        opt = (substr(k, 1, 1) == "?")
+        if (opt) k = substr(k, 2)
+        if (k == key) { ok = 1; break }
+        if (!opt) break
+      }
+      if (!ok) { bad = 1; next }
+      prevcomma = ($0 ~ /,$/)
+      nseen++
+    }
+    END {
+      if (bad || !sawend || nseen == 0) exit 1
+      while (ki < nk) { ki++; if (substr(K[ki], 1, 1) != "?") exit 1 }
+      exit 0
+    }
+  ' "$jl_file" 2>/dev/null
+}
 
 write_state() {
   tmp="$STATE.tmp"
@@ -368,28 +464,41 @@ write_state() {
   } > "$tmp" && mv "$tmp" "$STATE"
 }
 
-# Timer removal. The command that can kill this very process is ALWAYS last.
+# Timer removal. Disarm the schedule while its definition is still loaded
+# wherever the platform allows it, delete definitions around that, and LOG
+# every scheduler failure — a swallowed error must not let retired state
+# diverge silently from an installed timer. No daemon-reload here: reloading
+# before disable would make the unit not-found and the disable a silent no-op
+# (re-arm owns daemon-reload). The command that can kill this very process
+# (launchctl bootout of our own gui job) is ALWAYS last; stopping a systemd
+# timer unit does not kill the running oneshot service, so systemd may
+# disable first.
 remove_timer() {
   if [ "$(uname 2>/dev/null)" = "Darwin" ]; then
-    rm -f "$HOME/Library/LaunchAgents/$TIMER.plist" 2>/dev/null
+    rm -f "$HOME/Library/LaunchAgents/$TIMER.plist" 2>/dev/null || log "timer removal: could not delete $TIMER.plist"
     log "timer removal: plist deleted, booting out $TIMER (last action)"
-    launchctl bootout "gui/$(id -u)/$TIMER" >/dev/null 2>&1 || launchctl unload "$HOME/Library/LaunchAgents/$TIMER.plist" >/dev/null 2>&1
+    launchctl bootout "gui/$(id -u)/$TIMER" >/dev/null 2>&1 || launchctl unload "$HOME/Library/LaunchAgents/$TIMER.plist" >/dev/null 2>&1 || log "timer removal: bootout failed and the unload fallback could not use the deleted plist; the loaded job may persist until logout (state is retired, so its ticks no-op)"
     return 0
   fi
   if [ -f "$HOME/.config/systemd/user/$TIMER.timer" ]; then
-    rm -f "$HOME/.config/systemd/user/$TIMER.timer" "$HOME/.config/systemd/user/$TIMER.service" 2>/dev/null
-    log "timer removal: unit files deleted, disabling $TIMER.timer (last action)"
-    systemctl --user daemon-reload >/dev/null 2>&1
-    systemctl --user disable --now "$TIMER.timer" >/dev/null 2>&1
+    systemctl --user disable --now "$TIMER.timer" >/dev/null 2>&1 || log "timer removal: disable --now $TIMER.timer failed; the timer may still be listed"
+    rm -f "$HOME/.config/systemd/user/$TIMER.timer" "$HOME/.config/systemd/user/$TIMER.service" 2>/dev/null || log "timer removal: could not delete $TIMER unit files"
+    log "timer removal: $TIMER.timer disabled while still loaded, unit files deleted; no daemon-reload — re-arm owns that"
     return 0
   fi
-  ( crontab -l 2>/dev/null | grep -v "# $TIMER\$" ) | crontab - 2>/dev/null
-  log "timer removal: crontab line for $TIMER deleted"
+  if ( crontab -l 2>/dev/null | grep -v "# $TIMER\$" ) | crontab - 2>/dev/null; then
+    log "timer removal: crontab line for $TIMER deleted"
+  else
+    log "timer removal: crontab update failed; the cron line may persist"
+  fi
 }
 
 retire() {
   W_RETIRED=true
-  write_state
+  if ! write_state; then
+    emit_abort "failed to persist retirement ($1); timer left in place"
+    exit 0
+  fi
   log "retired: $1"
   remove_timer
 }
@@ -445,6 +554,8 @@ W_ARMEDAT=""; W_ABORTS=""; W_INFLIGHT=""
 state_bad=""
 if [ ! -f "$STATE" ]; then
   state_bad="watch state $STATE is missing"
+elif ! jlayout "$STATE" offsetBytes reinvokeCount retired lastStoppedDetail armedAt consecutiveAbortCount runInFlight; then
+  state_bad="watch state does not match the frozen layout (key order, uniqueness, quoting)"
 else
   W_OFFSET=$(jget "$STATE" offsetBytes)
   W_REINVOKE=$(jget "$STATE" reinvokeCount)
@@ -459,7 +570,6 @@ else
   elif ! is_uint "$W_ARMEDAT" || [ "$W_ARMEDAT" -le 0 ]; then state_bad="watch state armedAt is not a positive integer"
   elif ! is_bool "$W_RETIRED"; then state_bad="watch state retired is not a boolean"
   elif ! is_bool "$W_INFLIGHT"; then state_bad="watch state runInFlight is not a boolean"
-  elif ! jhas "$STATE" lastStoppedDetail; then state_bad="watch state lastStoppedDetail is missing"
   fi
 fi
 if [ -n "$state_bad" ]; then
@@ -471,7 +581,10 @@ fi
 NOW=$(date +%s)
 if [ $((NOW - W_ARMEDAT)) -gt 604800 ]; then
   W_RETIRED=true
-  write_state
+  if ! write_state; then
+    emit_abort "failed to persist the 7-day expiry retirement; timer left in place"
+    exit 0
+  fi
   emit_expired "7-day watch expiry"
   log "retired: 7-day watch expiry"
   remove_timer
@@ -481,6 +594,8 @@ fi
 contract_bad=""
 if [ ! -f "$CONTRACT" ]; then
   contract_bad="invocation contract $CONTRACT is missing"
+elif ! jlayout "$CONTRACT" epicId repoRoot atomScriptPath pciScriptPath maxWaves beadsDir "?baseBranch" "?implementModel"; then
+  contract_bad="invocation contract does not match the frozen layout (key order, uniqueness, quoting)"
 else
   C_EPIC=$(jget "$CONTRACT" epicId)
   C_REPO=$(jget "$CONTRACT" repoRoot)
@@ -505,10 +620,14 @@ fi
 if [ -n "$contract_bad" ]; then
   emit_abort "$contract_bad"
   W_ABORTS=$((W_ABORTS + 1))
-  write_state
   if [ "$W_ABORTS" -ge 3 ]; then
     W_RETIRED=true
-    write_state
+  fi
+  if ! write_state; then
+    log "failed to persist watch state after a contract abort; timer left in place"
+    exit 0
+  fi
+  if [ "$W_RETIRED" = "true" ]; then
     emit_expired "retired after 3 consecutive contract aborts"
     log "retired: 3 consecutive contract aborts"
     remove_timer
@@ -575,10 +694,13 @@ if [ -n "$lastrunev" ]; then
   if [ "$lastrunev" = "wave-start" ]; then W_INFLIGHT=true; else W_INFLIGHT=false; fi
 fi
 W_OFFSET=$((START + CONSUMED))
-write_state
 rm -f "$WIN" "$WIN.lines" 2>/dev/null
+# Nothing is persisted yet. The new cursor, lastStoppedDetail, runInFlight and
+# any retirement or infra-failure count from this window commit together in
+# ONE write_state below, so an interrupted tick re-reads the same window
+# instead of consuming it while dropping its effects.
 
-# --- 5. retire? -------------------------------------------------------------
+# --- 5. every effect of the consumed window, committed atomically ------------
 if [ "$SAW_PR_OPEN" = "yes" ]; then
   retire "epic PR is open"
   exit 0
@@ -588,6 +710,13 @@ case "$W_LASTSTOP" in
     retire "cut falsified; a recut is human work"
     exit 0 ;;
 esac
+if [ "$W_INFLIGHT" != "true" ] && [ "$SAW_INFRA_FAIL" = "yes" ]; then
+  W_REINVOKE=$((W_REINVOKE + 1))
+fi
+if ! write_state; then
+  emit_abort "failed to persist watch state after reading the window"
+  exit 0
+fi
 
 # --- 6. unblocked? ----------------------------------------------------------
 if [ "$W_INFLIGHT" = "true" ]; then
@@ -595,8 +724,6 @@ if [ "$W_INFLIGHT" = "true" ]; then
   exit 0
 fi
 if [ "$SAW_INFRA_FAIL" = "yes" ]; then
-  W_REINVOKE=$((W_REINVOKE + 1))
-  write_state
   log "infrastructure stop in the window; waiting for the operator (reinvokeCount now $W_REINVOKE)"
   exit 0
 fi
@@ -625,16 +752,26 @@ fi
 
 # --- 7. cap -----------------------------------------------------------------
 if [ "$W_REINVOKE" -ge 6 ]; then
-  emit_cap
   W_RETIRED=true
-  write_state
+  if ! write_state; then
+    emit_abort "failed to persist the cap retirement; timer left in place"
+    exit 0
+  fi
+  emit_cap
   log "retired: re-invocation cap reached"
   remove_timer
   exit 0
 fi
 
 # --- 8. re-invoke -----------------------------------------------------------
-dirty=$(git -C "$C_REPO" status --porcelain 2>/dev/null)
+# The guard requires git status to SUCCEED and print nothing: an inaccessible
+# or non-git repoRoot also produces empty output, and must abort, not pass.
+dirty=$(git -C "$C_REPO" status --porcelain 2>>"$WATCHLOG")
+gitrc=$?
+if [ "$gitrc" -ne 0 ]; then
+  emit_abort "git status failed in $C_REPO (exit $gitrc)"
+  exit 0
+fi
 if [ -n "$dirty" ]; then
   emit_abort "dirty worktree"
   exit 0
@@ -645,7 +782,10 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 W_REINVOKE=$((W_REINVOKE + 1))
-write_state
+if ! write_state; then
+  emit_abort "failed to persist reinvokeCount; refusing an uncounted invocation"
+  exit 0
+fi
 
 ARGS_JSON="{\"epicId\": \"$EPIC_ID\", \"atomScriptPath\": \"$C_ATOM\", \"pciScriptPath\": \"$C_PCI\", \"maxWaves\": $C_MAXW"
 if jhas "$CONTRACT" baseBranch; then ARGS_JSON="$ARGS_JSON, \"baseBranch\": \"$C_BASE\""; fi
@@ -669,7 +809,7 @@ exit 0
 ```
 <!-- ANVIL-TICK-TEMPLATE-END -->
 
-### 6. Arm the platform timer
+### 7. Arm the platform timer
 
 Only this step is platform-specific. The lock, the JSONs, the cursor,
 retirement and the cap are platform-neutral file/bd state and must stay that way.
@@ -749,20 +889,21 @@ the removal marker:
 
 Removal is the same pipeline without the `echo`.
 
-### 7. Re-arming is idempotent
+### 8. Re-arming is idempotent
 
 Refresh the contract JSON, the tick script and the timer definition, and
-**preserve** the existing watch-state counters and cursor. Report that it
+**preserve** the existing watch-state counters and cursor — the active-watch
+branch of step 5: the watch-state file is not rewritten. Report that it
 re-armed.
 
 **Except** when the existing watch state has `retired` true. An explicit re-arm
 is the sanctioned recovery from the cap, the expiry, a permanent-failure
 retirement, or a falsified-then-recut epic: reset `reinvokeCount` and
 `consecutiveAbortCount` to 0, `retired` to false, `armedAt` to now, and re-seed
-`offsetBytes`, `runInFlight` and `lastStoppedDetail` per step 4 — whose arm-time
-refusals still apply. Log the reset in the watch log.
+`offsetBytes`, `runInFlight` and `lastStoppedDetail` per steps 4–5 — whose
+arm-time refusals still apply. Log the reset in the watch log.
 
-### 8. `off` disarms
+### 9. `off` disarms
 
 `/anvil:watch-epic <epic-id> off` checks the lock (step 3), then performs the
 retirement steps: write `retired: true` into the watch state, then remove the
@@ -783,7 +924,9 @@ The script above is the contract; this is its shape in prose.
    file is never proof of staleness. The lock is held until the tick fully
    finishes, **including the invoked run** (run-epic can run for hours; ticks
    during it correctly no-op), and released on every exit path via `trap`.
-3. **Validate** both JSONs — types, ranges, identity, paths. Any failure appends
+3. **Validate** both JSONs — first the frozen layout itself (exact key order,
+   uniqueness, allowed-key set, one double-quoted value per line), then types,
+   ranges, identity, paths. Any failure appends
    `stopped||reinvoke-aborted; <what was missing>` and exits 0 without calling
    run-epic. **Never recreate or default watch state**: offset 0 would replay
    the whole shared log and `reinvokeCount` 0 would bypass the cap. Recovery is
@@ -802,11 +945,18 @@ The script above is the contract; this is its shape in prose.
    tick (and its invoked run) ran. A file smaller than the cursor means the
    operator removed or truncated it: reset to 0. Only lines whose third field is
    this epic count; split on the first five pipes; file order is the only
-   ordering (1-second timestamps forbid timestamp sorts).
-5. **Retire?** A valid `epic-pr-open` line → retire. `lastStoppedDetail`
-   beginning `cut-falsified` → retire. An `epic-complete` with no
-   `epic-pr-open` **never** retires — run-epic can report epic-complete when the
-   PR step failed, and a re-run must retry it.
+   ordering (1-second timestamps forbid timestamp sorts). Nothing is persisted
+   at this point — the cursor commits together with the window's effects in
+   step 5.
+5. **Commit, then retire?** Every effect of the consumed window — the new
+   cursor, `lastStoppedDetail`, `runInFlight`, an `epic-pr-open` retirement,
+   an infra-failure count — is decided first and persisted in ONE
+   `write_state`; a failed write aborts the tick (`reinvoke-aborted`) without
+   consuming the window, and no timer is ever removed before `retired: true`
+   is durably on disk. A valid `epic-pr-open` line → retire.
+   `lastStoppedDetail` beginning `cut-falsified` → retire. An `epic-complete`
+   with no `epic-pr-open` **never** retires — run-epic can report
+   epic-complete when the PR step failed, and a re-run must retry it.
 6. **Unblocked?** `runInFlight` → exit without invoking and without counting.
    A new `setup-failed` / `frontier-agent-failed` → do not invoke, but increment
    `reinvokeCount` so the cap bounds how long a broken epic keeps its timer.
@@ -814,11 +964,15 @@ The script above is the contract; this is its shape in prose.
    `wave-merged-zero-slices` or `max-waves-reached` **and** a child of the epic
    appears in `bd ready`; or when it begins `epic-complete` and step 5 did not
    retire (PR retry — no bd-ready requirement, the children are all done).
-7. **Cap.** `reinvokeCount` ≥ 6 → append `reinvoke-cap-reached`, persist
-   `retired: true`, then remove the timer.
-8. **Re-invoke.** Guard (clean worktree, usable `gh auth`) → increment and
-   persist → invoke. That order is fixed: a crashed run still counts, and a
-   transient guard failure never counts and never retires.
+7. **Cap.** `reinvokeCount` ≥ 6 → persist `retired: true` (a failed persist
+   aborts, leaving the timer), append `reinvoke-cap-reached`, then remove the
+   timer.
+8. **Re-invoke.** Guard (`git status` must **succeed** and print nothing — a
+   failing or unreachable repoRoot is an abort, not a clean tree — plus usable
+   `gh auth`) → increment and persist, where a failed persist aborts the
+   invocation so no run ever proceeds uncounted → invoke. That order is fixed:
+   a crashed run still counts, and a transient guard failure never counts and
+   never retires.
 
 The tick's `lastStoppedDetail` only ever tracks the seven run-epic tokens —
 `setup-failed`, `frontier-agent-failed`, `no-ready-children`,
