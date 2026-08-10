@@ -77,6 +77,10 @@ globals. Get these right:
   stage-wrapper; `pipeline(items, stage1, stage2, ...)` takes the stage callbacks
   directly, each `(prevResult, originalItem, index) => ...`. Inside pipeline
   stages, set grouping via the per-agent `phase:` opt, not the global `phase()`.
+- `parallel()` DOES nest inside a pipeline stage callback — it is the canonical
+  fan-out-within-a-stage shape (see `runBothReviews` in execute-review-fix.js).
+  An earlier commit's caution that nesting was unsupported proved wrong; don't
+  reintroduce sequential legs on that basis.
 - `agent(prompt, { schema })` returns a validated object; without a schema it
   returns text. `agent(prompt, { agentType: 'anvil-reviewer' })` uses a plugin
   subagent.

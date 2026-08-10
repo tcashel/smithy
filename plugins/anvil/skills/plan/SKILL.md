@@ -21,7 +21,7 @@ The spec you lock here is picked up downstream:
 
 1. `/anvil:critique` runs the critic panel against the spec body and synthesizes recommendations.
 2. `/anvil:adjudicate` resolves the cruxes and produces the improved, locked spec.
-3. `/anvil:dispatch` reads `bd ready` (honoring `$BEADS_DIR`), launches a fresh-worktree agent against the spec body, runs the quality gate, opens a **draft** PR, runs the reviewer, and applies one auto-fix round — then stops for the operator to adjudicate the merge.
+3. `/anvil:dispatch` reads `bd ready` (honoring `$BEADS_DIR`), has an implementing subagent build the spec body in a disposable worktree, runs the quality gate, opens a **draft** PR, reviews it with both reviewers (`anvil-reviewer` plus the codex relay when installed), and applies one auto-fix round — then stops for the operator to adjudicate the merge.
 
 The launched agent sees **only the spec body**. Not this conversation, not your research notes, not the repo's `CLAUDE.md`. Anything the agent needs must be inside `~/.anvil/specs/<id>.md`. A vague spec produces a confused agent. That single fact is why this skill exists.
 

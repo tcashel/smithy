@@ -107,6 +107,17 @@ bd update <id> --status ready
 
 Use whatever your bd version's status-transition verb is (`bd update <id> --status ready`, or `bd ready <id>` if that's the form) — the goal is: the issue leaves adjudication in the `ready` state so `/anvil:dispatch`'s work-list (`bd ready`) picks it up. Confirm with `bd show <id>`.
 
+Then retire the critique panel's scratch artifacts — the codex leg's prompt/log/pid
+under `~/.anvil/runs/critique/<id>/` have no reader once the spec is adjudicated,
+and nothing else sweeps that directory:
+
+```bash
+rm -rf "$HOME/.anvil/runs/critique/<id>"
+```
+
+(Keep `~/.anvil/specs/<id>.recommendations.md` — it is the audit trail of what the
+panel found; only the run scratch goes.)
+
 ## Output
 
 End with a tight summary the operator can scan:

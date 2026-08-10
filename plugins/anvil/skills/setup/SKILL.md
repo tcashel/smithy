@@ -1,6 +1,6 @@
 ---
 name: setup
-description: "One-time setup for anvil: install and configure beads (bd or br) operator-scoped, verify the table-stakes tooling (git, gh + auth, claude), stand up the out-of-repo state under ~/.anvil, and PROVE the install imposed nothing on any target repo. Use when the operator first installs the anvil plugin, when bd/br is missing, or when /anvil:plan or /anvil:dispatch complains that beads isn't set up."
+description: "One-time setup for anvil: install and configure beads (bd or br) operator-scoped, verify the table-stakes tooling (git, gh + auth, and the optional codex CLI for the cross-family critic/reviewer legs), stand up the out-of-repo state under ~/.anvil, and PROVE the install imposed nothing on any target repo. Use when the operator first installs the anvil plugin, when bd/br is missing, or when /anvil:plan or /anvil:dispatch complains that beads isn't set up."
 ---
 
 # anvil setup
@@ -25,13 +25,14 @@ shell profile. It must NEVER mutate a target repo. Therefore:
 - **Ask before editing the shell profile** (`~/.zshrc` etc.). Offer to do it;
   don't do it silently.
 - **Never** write into a target repo, and **never** invoke the `forge` binary.
-  anvil uses only `bd`/`br`, `git`, `gh`, and `claude`.
+  anvil shells out only to `bd`/`br`, `git`, `gh`, and (optionally) `codex`;
+  every agent in the pipeline is a workflow subagent, not a spawned CLI.
 
 ## Step 1 — Detect the environment
 
 ```bash
 uname -s                       # Darwin / Linux
-command -v brew cargo go gh git claude 2>/dev/null   # what's available
+command -v brew cargo go gh git claude codex 2>/dev/null   # what's available
 ```
 
 Note the platform and which package managers exist — you'll pick the beads
@@ -48,6 +49,14 @@ These are not anvil's job to install, only to verify and guide:
   (macOS) or point to <https://cli.github.com>. If it's installed but not
   authenticated, tell the operator to run `gh auth login` themselves (it's
   interactive — suggest they type `! gh auth login` in the session).
+- **codex** *(optional, recommended)* — powers the critique panel's third critic
+  and the atom's second reviewer (cross-model-family corroboration). Check
+  `command -v codex`, then `codex login status` — it must say logged in
+  ("Logged in using ChatGPT" or an API key). If codex is absent, say so and move
+  on: both legs degrade loudly to "unavailable" and the pipeline is unaffected.
+  If it is installed but NOT logged in, warn the operator explicitly — a headless
+  leg must fail fast, never sit at a login prompt — and suggest they type
+  `! codex login` in the session. Never run `codex login` yourself.
 
 ## Step 3 — Install beads (the one thing anvil specifically needs)
 
@@ -159,6 +168,8 @@ Tell the operator, concisely:
 - Which beads binary is installed (`bd`/`br`) and its version.
 - Where state lives (`$BEADS_DIR`, `~/.anvil/specs/`).
 - `gh` auth status and any remaining manual step (e.g. `gh auth login`).
+- `codex` status: absent / installed-but-unauthenticated / ready — and what that
+  means for the panel (two critics vs three, one reviewer vs two).
 - The operator-scope log result.
 - Next step: **`/anvil:plan`** to draft and lock the first spec.
 

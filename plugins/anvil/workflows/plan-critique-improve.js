@@ -193,22 +193,25 @@ const RECOMMENDATIONS_SCHEMA = {
         required: ["question", "raisedBy", "context"],
         properties: {
           question: { type: "string" },
-          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "Critic C (codex)", "both"] },
+          raisedBy: { type: "string", enum: ["Critic A", "Critic B", "Critic C (codex)", "both", "all three"] },
           context: { type: "string", description: "Why this matters / what hinges on the answer" },
         },
       },
     },
     conflicts: {
       type: "array",
-      description: "Findings where the two critics DISAGREE (one says fine, one says broken). LEFT for /anvil:adjudicate — never auto-applied.",
+      description: "Findings where critics DISAGREE (one says fine, another says broken) — any two members of the panel. LEFT for /anvil:adjudicate — never auto-applied.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "criticAPosition", "criticBPosition", "context"],
+        // Only title+context are required: a conflict names the positions of
+        // whichever critics actually clashed. An A-vs-C conflict legitimately
+        // has no criticBPosition — do not force the synthesizer to invent one.
+        required: ["title", "context"],
         properties: {
           title: { type: "string" },
-          criticAPosition: { type: "string" },
-          criticBPosition: { type: "string" },
+          criticAPosition: { type: "string", description: "Critic A's side, when A is party to the conflict." },
+          criticBPosition: { type: "string", description: "Critic B's side, when B is party to the conflict." },
           criticCPosition: { type: "string", description: "The codex leg's position, when it ran and took a side. Omit otherwise." },
           context: { type: "string", description: "What the human must decide to resolve it" },
         },
@@ -532,6 +535,7 @@ function buildCodexCriticPrompt(spec, targetRepo) {
   const promptFile = `${dir}/codex-prompt.txt`;
   const outFile = `${dir}/codex-out.log`;
   const pidFile = `${dir}/codex.pid`;
+  const lastFile = `${dir}/codex-last.txt`;
   return [
     "You are the RELAY for the critic panel's third leg. You do NOT critique the spec yourself:",
     "you hand it to the `codex` CLI — a different model family, which is the entire point — and",
@@ -557,6 +561,7 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "",
     "```bash",
     `nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\`,
+    `  -o ${lastFile} \\`,
     `  "$(cat ${promptFile})" > ${outFile} 2>&1 < /dev/null &`,
     `echo $! > ${pidFile}`,
     "```",
@@ -580,14 +585,13 @@ function buildCodexCriticPrompt(spec, targetRepo) {
     "outright — non-zero exit, an auth or model error, empty output — return available=false with",
     "the error text in the summary. Again: never substitute your own critique for codex's.",
     "",
-    "## 3. Recover the FULL message before you relay it",
-    "codex's terminal output can be clipped mid-message, and a clipped critique silently loses",
-    "findings. The complete text is on disk in the session transcript:",
-    "~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer. Find",
-    "the transcript for the session you just ran by matching its CONTENT to this spec (other,",
-    "unrelated codex sessions write into the same tree — do not grab one by position), then read",
-    "its last assistant message in full. Where the terminal and the transcript disagree, the",
-    "transcript wins.",
+    "## 3. Read the FULL message before you relay it",
+    `The \`-o\` flag wrote codex's complete final message to ${lastFile} — that file is`,
+    "authoritative; read it in full (the terminal log can clip mid-message, and a clipped critique",
+    "silently loses findings). FALLBACK, only if that file is missing or empty (e.g. the run was",
+    "killed): the session transcript at ~/.codex/sessions/YYYY/MM/DD/*.jsonl carries the assistant",
+    "messages. Find the session you just ran by matching its CONTENT to this spec — other, unrelated",
+    "codex sessions write into the same tree, so never grab one by position.",
     "",
     "## 4. Relay it faithfully",
     "codex has no structured-return channel — it will emit the fenced block and nothing else, so",
@@ -616,8 +620,9 @@ function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
       ? "NOTE: one critic FAILED to return. You have only ONE critique below. Corroboration is\n" +
         "impossible: classify every finding 'single-critic-only', leave `conflicts` empty, and say in\n" +
         "the confidenceNote that this was a single-critic pass."
-      : "You are given the original spec and two INDEPENDENT critiques produced from different angles\n" +
-        "by different models (Critic A: fable, correctness lens; Critic B: opus, completeness lens).\n" +
+      : "You are given the original spec and the INDEPENDENT critiques below, produced from different\n" +
+        "angles by different models (Critic A: fable, correctness lens; Critic B: opus, completeness\n" +
+        "lens). Where a critique below is marked failed, weigh only those present.\n" +
         "Different models and lenses have different blind spots:",
     "- A finding raised by BOTH critics is almost certainly real → classification 'corroborated'.",
     "- A finding raised by only ONE critic is medium confidence → 'single-critic-only' (use judgment).",
@@ -637,8 +642,9 @@ function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC) {
           "- A finding only C raised is 'single-critic-only', but that is not a lesser class: catching",
           "  what one family cannot see is exactly why the second family is here. Judge it on merits.",
           "- Fill `criticC` in every `triage` row. Use `criticCPosition` in a conflict where C took a",
-          "  side, and `raisedBy: \"Critic C (codex)\"` for an open question only C raised (`\"both\"`",
-          "  covers any question more than one critic raised).",
+          "  side (a conflict names the positions of whichever critics clashed — an A-vs-C conflict",
+          "  simply has no criticBPosition), and `raisedBy: \"Critic C (codex)\"` for an open question",
+          "  only C raised. Use \"all three\" when every critic raised it, \"both\" when exactly two did.",
           "- Say in `confidenceNote` that the codex leg RAN, and whether it corroborated A/B or",
           "  diverged from them.",
         ]

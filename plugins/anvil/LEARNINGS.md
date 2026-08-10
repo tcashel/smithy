@@ -84,7 +84,8 @@ on.
 ## 4. The atom stops at a draft PR
 
 The execution atom is fixed: launch -> quality gate -> draft PR -> review ->
-ONE auto-fix round (`autoFixRounds` default 1) -> stop. It never auto-merges.
+ONE auto-fix round (a constant in the workflow, deliberately not a knob) -> stop.
+It never auto-merges.
 
 Sessions are jobs, not shows — "Plan. Run. Review. Ship. Don't watch." The point of
 stopping at a draft is that the human adjudicates the merge. The loop does the toil

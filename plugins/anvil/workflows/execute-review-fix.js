@@ -40,8 +40,12 @@ export const meta = {
   description:
     "anvil execution atom: for each bd-ready issue, a subagent implements its spec in a disposable worktree, then the atom gates quality, opens a DRAFT PR, reviews it (anvil-reviewer plus codex when installed), runs one auto-fix round, and stops. Never merges.",
   phases: [
-    { title: "resolve" }, { title: "implement" }, { title: "quality" },
-    { title: "pr" }, { title: "review" }, { title: "fix" },
+    { title: "resolve", detail: "Resolve the spec + prepare a disposable worktree" },
+    { title: "implement", detail: "A subagent builds the spec in the worktree" },
+    { title: "quality", detail: "Run the spec's quality gate commands" },
+    { title: "pr", detail: "Open (or reuse) the labeled DRAFT PR" },
+    { title: "review", detail: "anvil-reviewer + codex relay, severer verdict wins" },
+    { title: "fix", detail: "ONE auto-fix round, then stop — never merge" },
   ],
 };
 
@@ -558,6 +562,7 @@ PR url: ${item.prUrl}
 Gather context with gh (never the \`forge\` binary):
   - \`gh pr view ${item.prNumber} --json number,title,body,headRefName,baseRefName,additions,deletions,changedFiles,url\`
   - \`gh pr diff ${item.prNumber}\`  (cap at ~60k chars)
+  - \`gh pr checks ${item.prNumber}\`  (CI status — the verdict depends on it)
   - The linked spec body at ${item.specPath} — the diff must satisfy THIS spec.
 
 Produce your review as a single \`\`\`anvil-review fenced block with a verdict of
@@ -608,6 +613,7 @@ get moved to the background, and take the result with it.
 \`\`\`bash
 cd ${item.worktree}
 nohup codex exec --sandbox read-only -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\
+  -o ${dir}/last.txt \\
   "$(cat ${dir}/prompt.txt)" > ${dir}/out.log 2>&1 < /dev/null &
 echo $! > ${dir}/pid
 \`\`\`
@@ -630,14 +636,14 @@ exit 0
 If it is still running after your last poll, \`kill "$PID"\` and return available=false
 with what you have — an orphan left grinding is worse than an honest gap.
 
-## 4. Recover the FULL message before you relay it
-codex's terminal output can be clipped mid-message, and a clipped review silently
-loses findings. The complete text is in the session transcript under
-~/.codex/sessions/YYYY/MM/DD/*.jsonl — the assistant messages carry the final answer.
-Find the transcript for the session you just ran by matching its CONTENT to this PR
-(other, unrelated codex sessions write into the same tree — never pick one by
-position), and read its last assistant message in full. Where the terminal output and
-the transcript disagree, the transcript wins.
+## 4. Read the FULL message before you relay it
+The \`-o\` flag wrote codex's complete final message to ${dir}/last.txt — that file is
+authoritative; read it in full (the terminal log can clip mid-message, and a clipped
+review silently loses findings). FALLBACK, only if that file is missing or empty
+(e.g. the run was killed): the session transcript under
+~/.codex/sessions/YYYY/MM/DD/*.jsonl carries the assistant messages. Find the session
+you just ran by matching its CONTENT to this PR — other, unrelated codex sessions
+write into the same tree, so never pick one by position.
 
 ## 5. Relay, and publish
 Return codex's verdict and findings as codex stated them — severities included. You
@@ -694,6 +700,9 @@ function finalize(item) {
   if (!status) {
     if (item.implemented === false) status = "implement-failed";
     else if (!item.prNumber) status = "no-pr";
+    // Both reviewer legs died: the draft PR exists but carries NO verdict. Say
+    // so — "ready-for-adjudication" would misread as "reviewed and waiting".
+    else if (!item.review) status = "review-failed";
     else status = "draft-pr-ready-for-adjudication";
   }
   return { ...item, status };
