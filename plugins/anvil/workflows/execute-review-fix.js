@@ -236,6 +236,11 @@ const stage = (title, fn) => fn;
         schema: resolveSchema,
         phase: "resolve",
         label: `resolve:${item.id}`,
+        // Checklist seats (resolve, quality, draft-PR) run sonnet: the epic
+        // dogfood showed them producing 700-7k output tokens of pure
+        // instruction-following at flagship rates — ~16% of the epic's cost
+        // for zero judgment. The merge/review/fix seats stay on fable.
+        model: "sonnet",
       });
       if (!r) return { ...item, ready: false, status: "skipped", note: "resolve agent failed" };
       return { ...item, ...r };
@@ -246,17 +251,30 @@ const stage = (title, fn) => fn;
       if (item.ready === false) {
         return { ...item, status: "skipped", note: item.note ?? "spec not resolvable" };
       }
-      const r = await agent(implementPrompt(item), {
-        schema: implementSchema,
-        phase: "implement",
-        label: `implement:${item.id}`,
-        // Deliberate pin, not drift: the toil seat runs opus so the fable
-        // reviewer is both stronger than and different from the model whose
-        // work it judges. Unpinned, this seat silently tracked whatever model
-        // the operator's session happened to be running. The args override
-        // exists for hard slices (e.g. implementModel:"fable" per run).
-        model: implementModel || "opus",
-      });
+      // Deliberate pin, not drift: the toil seat defaults to fable. The epic
+      // dogfood priced the escape path — wave 2's review+fix loop cost ~5x its
+      // opus implement stage after 10 BLOCKER/HIGH escapes, all of which the
+      // fable fix agent then cleared in one round — so the strongest model sits
+      // where the defects originate. Overrides per run: implementModel:"opus"
+      // for simple slices, or "codex" to hand the build to the other model
+      // family via the relay below (the fable reviewer then judges work from a
+      // family whose blind spots it does not share). The codex seat is a relay
+      // subagent shelling to the codex CLI — the one sanctioned CLI spawn
+      // (cardinal rule) — not a return to the spawned-claude shape LEARNINGS
+      // §11 retired.
+      const r = implementModel === "codex"
+        ? await agent(codexImplementPrompt(item), {
+            schema: implementSchema,
+            phase: "implement",
+            label: `implement:${item.id}:codex`,
+            model: "sonnet",
+          })
+        : await agent(implementPrompt(item), {
+            schema: implementSchema,
+            phase: "implement",
+            label: `implement:${item.id}`,
+            model: implementModel || "fable",
+          });
       if (!r) return { ...item, implemented: false, note: "implement agent failed" };
       return { ...item, ...r };
     }),
@@ -270,6 +288,7 @@ const stage = (title, fn) => fn;
         schema: qualitySchema,
         phase: "quality",
         label: `quality:${item.id}`,
+        model: "sonnet",
       });
       // Quality failure does NOT abort the atom: Forge still opens the draft PR
       // so CI and the human can see the failure. We carry the result forward.
@@ -286,6 +305,7 @@ const stage = (title, fn) => fn;
         schema: prSchema,
         phase: "pr",
         label: `pr:${item.id}`,
+        model: "sonnet",
       });
       if (!r) return { ...item, prNumber: null, note: "pr agent failed" };
       return { ...item, ...r };
@@ -525,6 +545,81 @@ ${gate}
    in gateOutput, and 2-4 sentences on what you changed in summary.`;
 }
 
+// The codex implement seat. A relay, not a builder: it hands the spec to the
+// codex CLI with write access to the disposable worktree and reports what got
+// built. Same background+poll shape as the codex reviewer (LEARNINGS §10) —
+// an xhigh build outlives a single Bash call by even more than a review does.
+function codexImplementPrompt(item) {
+  const dir = `$HOME/.anvil/runs/${item.id}/codex-implement`;
+  return `You are the RELAY for anvil's implementing agent on bd issue ${item.id}.
+You do NOT build the spec yourself: the operator chose the \`codex\` CLI — a different
+model family — for this seat, and your job is to run it, watch it, and report
+honestly. Use Bash. Working directory: ${item.worktree}
+
+## 1. Is codex here?
+\`command -v codex\`. If it is not on PATH, STOP: return implemented=false with a note
+saying the codex CLI is not installed. Do NOT implement the spec yourself — a build
+from the wrong seat defeats the operator's choice, and an honest failure lets them
+re-run with implementModel:"fable" instead.
+
+## 2. Build the instruction file
+\`mkdir -p ${dir}\`, then write ${dir}/prompt.txt containing, in order:
+  - the instruction: implement the spec below inside this worktree, exactly and only
+    what it says; where it is silent take the smallest choice consistent with the
+    surrounding code; run the quality gate commands before the first commit and after
+    the last; commit as you go with \`git add <path>\` on intentionally-changed files
+    (never \`git add -A\`) and conventional-commit messages; do NOT push, do NOT open
+    a PR; finish with a short report of what changed and the gate's final state.
+  - the quality gate commands from the spec (${(item.qualityCommands && item.qualityCommands.length ? item.qualityCommands.join(" · ") : "none listed — tell codex to find and run the repo's own lint/typecheck/test")}).
+  - the spec body, verbatim, from ${item.specPath}.
+
+## 3. Run it in the BACKGROUND, then poll
+codex needs WRITE access to the worktree, so this seat runs --sandbox workspace-write
+(the worktree is disposable; that is the whole point of it). Never wait in one
+foreground call:
+
+\`\`\`bash
+cd ${item.worktree}
+nohup codex exec --sandbox workspace-write -m "\${ANVIL_CODEX_MODEL:-gpt-5.6-sol}" -c "model_reasoning_effort=\\"\${ANVIL_CODEX_EFFORT:-xhigh}\\"" \\
+  -o ${dir}/last.txt \\
+  "$(cat ${dir}/prompt.txt)" > ${dir}/out.log 2>&1 < /dev/null &
+echo $! > ${dir}/pid
+\`\`\`
+
+Then poll REPEATEDLY, as separate calls, until it prints CODEX_DONE — up to about
+10 times (~40 minutes; a build runs longer than a review):
+
+\`\`\`bash
+PID="$(cat ${dir}/pid 2>/dev/null || echo)"; W=0
+while [ "$W" -lt 240 ]; do
+  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then echo CODEX_DONE; break; fi
+  sleep 10; W=$((W + 10))
+done
+git -C ${item.worktree} log --oneline -3 2>/dev/null
+tail -3 ${dir}/out.log 2>/dev/null
+exit 0
+\`\`\`
+
+If it is still running after your last poll, \`kill "$PID"\` and report
+implemented=false with whatever state the worktree is in — an orphan left grinding
+is worse than an honest timeout.
+
+## 4. Verify before you relay
+Read ${dir}/last.txt in full (it is codex's complete final message; the terminal log
+can clip). Then verify against the worktree, not the claim:
+  - commits: \`git -C ${item.worktree} rev-list --count ${item.baseRef || "origin/main"}..HEAD\`
+    goes in commitsAhead.
+  - if codex made changes but left them uncommitted (\`git status --porcelain\` is
+    non-empty), commit them yourself as mechanical glue: \`git add\` each listed path
+    (never -A), one conventional commit noting it finishes codex's work. Say you did
+    this in the summary.
+  - implemented=true ONLY if the spec is actually built and committed. A worktree
+    with zero commits and a confident final message is implemented=false, with
+    codex's own words quoted in note.
+Put codex's reported gate state in gateOutput and 2-4 sentences on what changed in
+summary — attribute the build to codex so the reviewers know which family wrote it.`;
+}
+
 // ── Stage 3: quality gate ─────────────────────────────────────────────────────
 function qualityPrompt(item) {
   const cmds = item.qualityCommands && item.qualityCommands.length
@@ -698,18 +793,24 @@ ${(item.review?.findings || [])
 // or { ids: [...], baseRef?, implementModel? }. The object extras exist for the
 // epic wave runner (run-epic.js): baseRef points every atom at an integration
 // branch instead of the default branch, and implementModel overrides the
-// implementer's pinned model for this run. Bare ids keep working unchanged —
+// implementer seat for this run — "opus" for simple slices, "codex" for the
+// cross-family relay build; unset means fable. Bare ids keep working unchanged —
 // and with no overrides every prompt below is byte-identical to the
 // no-override form, so resumed runs still replay from cache.
 function parseAtomArgs(args) {
   const clean = (xs) => xs.map(String).map((s) => s.trim()).filter(Boolean);
-  if (Array.isArray(args)) return { ids: clean(args), baseRef: "", implementModel: "" };
-  if (typeof args === "string") return { ids: clean(args.split(/[\s,]+/)), baseRef: "", implementModel: "" };
-  if (args && typeof args === "object" && Array.isArray(args.ids)) {
+  // A JSON-string object must parse as the object form, not shred into "ids".
+  let a = args;
+  if (typeof a === "string" && a.trim().startsWith("{")) {
+    try { a = JSON.parse(a); } catch (e) { /* genuinely an id string — handled below */ }
+  }
+  if (Array.isArray(a)) return { ids: clean(a), baseRef: "", implementModel: "" };
+  if (typeof a === "string") return { ids: clean(a.split(/[\s,]+/)), baseRef: "", implementModel: "" };
+  if (a && typeof a === "object" && Array.isArray(a.ids)) {
     return {
-      ids: clean(args.ids),
-      baseRef: args.baseRef ? String(args.baseRef).trim() : "",
-      implementModel: args.implementModel ? String(args.implementModel).trim() : "",
+      ids: clean(a.ids),
+      baseRef: a.baseRef ? String(a.baseRef).trim() : "",
+      implementModel: a.implementModel ? String(a.implementModel).trim() : "",
     };
   }
   return { ids: [], baseRef: "", implementModel: "" };

@@ -76,7 +76,7 @@ First resolve the bundled workflow's absolute path (**`${CLAUDE_PLUGIN_ROOT}` is
 ```bash
 WF="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/workflows/execute-review-fix.js}"
 [ -f "$WF" ] || WF="$(find "$HOME/.claude/plugins" -type f \
-  -name execute-review-fix.js -path '*anvil/workflows*' 2>/dev/null | head -1)"
+  -name execute-review-fix.js -path '*anvil*/workflows*' 2>/dev/null | head -1)"
 echo "$WF"
 ```
 
@@ -134,7 +134,9 @@ the draft PR, that state has no reader left — retire it:
 ```sh
 git worktree remove "$HOME/.anvil/runs/<id>/worktree"   # --force if it has junk in it
 git -C <repoRoot> worktree prune                        # drop the stale registration
-rm -rf "$HOME/.anvil/runs/<id>"                         # scratch files + the dir itself
+# scratch files + the dir itself — on macOS prefer `trash` (recoverable, and
+# home-path guard hooks allow it); rm -rf is the Linux fallback:
+trash "$HOME/.anvil/runs/<id>" 2>/dev/null || rm -rf "$HOME/.anvil/runs/<id>"
 ```
 
 Order matters: removing the directory without `git worktree remove` leaves the

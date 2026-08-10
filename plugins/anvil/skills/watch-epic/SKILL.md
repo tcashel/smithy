@@ -119,7 +119,7 @@ is NOT expanded in skill text**):
 
 ```sh
 WFDIR="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/workflows}"
-[ -d "$WFDIR" ] || WFDIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil/workflows' 2>/dev/null | head -1)"
+[ -d "$WFDIR" ] || WFDIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil*/workflows' 2>/dev/null | head -1)"
 ls "$WFDIR/run-epic.js" "$WFDIR/execute-review-fix.js" "$WFDIR/plan-critique-improve.js"
 ```
 

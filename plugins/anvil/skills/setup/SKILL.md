@@ -99,7 +99,7 @@ first, then run the bundled bootstrap:
 
 ```bash
 ANVIL_PLUGIN_ROOT="$(find "$HOME/.claude/plugins" "$HOME/repositories" "$HOME/repos" "$HOME/src" \
-  -type f -name install-beads.sh -path '*anvil/bootstrap*' 2>/dev/null | head -1 \
+  -type f -name install-beads.sh -path '*anvil*/bootstrap*' 2>/dev/null | head -1 \
   | xargs -r dirname | xargs -r dirname)"
 echo "anvil plugin root: $ANVIL_PLUGIN_ROOT"
 

@@ -102,17 +102,25 @@ Only when the gate passes:
 
 ```bash
 # honor $BEADS_DIR (default ~/.anvil/beads)
-bd update <id> --status ready
+bd update <id> --status open
 ```
 
-Use whatever your bd version's status-transition verb is (`bd update <id> --status ready`, or `bd ready <id>` if that's the form) — the goal is: the issue leaves adjudication in the `ready` state so `/anvil:dispatch`'s work-list (`bd ready`) picks it up. Confirm with `bd show <id>`.
+Note the vocabulary: bd 1.0.5 has **no literal `ready` status** — its statuses are
+`open` / `blocked` / `closed`, and `bd ready` *derives* readiness (status `open` with
+no open blocking dependencies). So the flip is `--status open` (the issue was likely
+filed `blocked` at lock time), and the check that matters is that `bd ready` now
+lists the id. On a bd/br build that does expose an explicit ready verb, use that —
+the contract is only: the issue leaves adjudication so `/anvil:dispatch`'s work-list
+(`bd ready`) picks it up. Confirm with `bd show <id>` and `bd ready`.
 
 Then retire the critique panel's scratch artifacts — the codex leg's prompt/log/pid
 under `~/.anvil/runs/critique/<id>/` have no reader once the spec is adjudicated,
 and nothing else sweeps that directory:
 
 ```bash
-rm -rf "$HOME/.anvil/runs/critique/<id>"
+# macOS: prefer `trash` — recoverable, and home-path guard hooks allow it
+trash "$HOME/.anvil/runs/critique/<id>" 2>/dev/null \
+  || rm -rf "$HOME/.anvil/runs/critique/<id>"
 ```
 
 (Keep `~/.anvil/specs/<id>.recommendations.md` — it is the audit trail of what the

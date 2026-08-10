@@ -737,6 +737,12 @@ function buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC, mode) {
     "First emit a single fenced block tagged exactly `anvil-spec-recommendations` with: Summary,",
     "Recommended Edits (priority-ordered, each with classification, severity, source, current text,",
     "recommended replacement, rationale), Open Questions, Conflicts, a Findings Triage table, and a",
-    "Confidence Note. Then return the structured object matching the schema.",
+    "Confidence Note.",
+    "Then PERSIST the exact structured object you are about to return: write it as pretty-printed",
+    `JSON to "$HOME/.anvil/runs/${spec.specId}-recommendations.json" (mkdir -p "$HOME/.anvil/runs"`,
+    "first). Downstream consumers — the epic promotion gate in particular — read that FILE, because",
+    "inlining a large recommendations object into a later prompt truncates it silently. The file and",
+    "the returned object must be the same object.",
+    "Then return the structured object matching the schema.",
   ].join("\n");
 }

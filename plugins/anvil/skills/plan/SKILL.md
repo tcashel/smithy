@@ -40,7 +40,7 @@ You progress through four short phases. Each has a companion file (`research.md`
 
 ```bash
 PLAN_DIR="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/skills/plan}"
-[ -d "$PLAN_DIR" ] || PLAN_DIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil/skills/plan' 2>/dev/null | head -1)"
+[ -d "$PLAN_DIR" ] || PLAN_DIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil*/skills/plan' 2>/dev/null | head -1)"
 ```
 
 Then `read` e.g. `$PLAN_DIR/schema.md` when you reach the relevant phase.
