@@ -274,3 +274,29 @@ and an implementer's blast radius is bounded by what its outputs are allowed to 
 not by pretending it doesn't need write access. When adding a new leg, pick its cage
 deliberately: read-only role → mechanical sandbox; read-write role → structural
 boundary plus human adjudication at the exit.
+
+## 14. Price the loop, not the seat: the strongest model belongs where defects originate
+
+The first dogfooded epic priced every seat from its transcripts. The implement stage
+was ~10% of the epic's API-equivalent cost; the review + re-review + fix loop was
+~43% — and on the hard slice (a portable-sh state machine) that loop ran ~5× the
+implement stage's cost, cleaning up 10 BLOCKER/HIGH escapes from an opus build that
+the fable fix agent then cleared in one round. Judging the implementer seat by its
+own line item ("opus is half price") optimizes the cheap column and inflates the
+expensive one: every escaped defect is paid for again downstream, at review prices,
+by the stronger model anyway.
+
+So the roster inverts: **fable implements by default**, and `implementModel:"opus"`
+is the opt-in for genuinely simple slices — not the other way round. (`"codex"` hands
+the build to the other model family via a relay, which flips the review asymmetry:
+the fable reviewers then judge work from a family whose blind spots they don't
+share.) The same audit found the opposite mismatch at the bottom: setup, frontier,
+resolve, quality-gate, and PR seats — pure instruction-following, 700–7k output
+tokens each — were burning flagship rates for ~16% of the epic. Those pin to sonnet.
+The merge seat stays on fable deliberately: it is the one plumbing agent doing
+security-load-bearing verification (PR base check before an auto-merge), and it
+costs pennies.
+
+The principle: cost-tune a pipeline by tracing where defects are *created* and where
+they are *paid for*, then put capability at the origin and thrift in the plumbing —
+never the reverse.

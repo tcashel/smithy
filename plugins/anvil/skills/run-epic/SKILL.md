@@ -35,7 +35,7 @@ in skill text**):
 
 ```bash
 WFDIR="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/workflows}"
-[ -d "$WFDIR" ] || WFDIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil/workflows' 2>/dev/null | head -1)"
+[ -d "$WFDIR" ] || WFDIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil*/workflows' 2>/dev/null | head -1)"
 ls "$WFDIR/run-epic.js" "$WFDIR/execute-review-fix.js" "$WFDIR/plan-critique-improve.js"
 ```
 
@@ -55,7 +55,10 @@ ride along):
 ```
 
 `maxWaves` (default 3, clamp 1–10) bounds the run. `implementModel` optionally
-overrides the atoms' pinned implementer (e.g. `"fable"` for a hard epic).
+overrides the atoms' implementer seat, which **defaults to fable** (LEARNINGS §14):
+pass `"opus"` to opt a genuinely simple epic down, or `"codex"` to hand the builds
+to the other model family via the atom's relay (the fable reviewers then judge work
+from a family whose blind spots they don't share).
 `baseBranch` optionally pins what the epic is cut from and lands on: with it the
 integration branch is created (or reused) from `origin/<baseBranch>` and the
 final draft PR targets `--base <baseBranch>` instead of the repo's default

@@ -24,7 +24,7 @@ First resolve the bundled workflow's absolute path. **`${CLAUDE_PLUGIN_ROOT}` is
 ```bash
 WF="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/workflows/plan-critique-improve.js}"
 [ -f "$WF" ] || WF="$(find "$HOME/.claude/plugins" -type f \
-  -name plan-critique-improve.js -path '*anvil/workflows*' 2>/dev/null | head -1)"
+  -name plan-critique-improve.js -path '*anvil*/workflows*' 2>/dev/null | head -1)"
 echo "$WF"
 ```
 

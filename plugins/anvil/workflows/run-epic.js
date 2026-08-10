@@ -31,7 +31,10 @@
 //                       promotion critiques; without it promotion is skipped
 //                       and stubs stay blocked)
 //     maxWaves:        3             optional, clamped 1..10
-//     implementModel:  "fable"       optional per-run override for the atoms
+//     implementModel:  "opus"        optional per-run override for the atoms'
+//                       implementer seat — unset means fable (the default);
+//                       "opus" suits simple slices, "codex" hands the build
+//                       to the other model family via the atom's relay
 //     baseBranch:      "seed"        optional: cut/reuse the integration branch from
 //                       origin/<baseBranch> and target the epic PR at it, instead of
 //                       resolving origin/HEAD. Absent → unchanged origin/HEAD behavior.
@@ -179,7 +182,12 @@ const EPIC_PR_SCHEMA = {
   }
 
   phase("setup");
-  const setup = await agent(setupPrompt(cfg.epicId, cfg.baseBranch), { schema: SETUP_SCHEMA, phase: "setup", label: `setup:${cfg.epicId}` });
+  // Checklist seats (setup, frontier, epic-pr) run sonnet — the epic dogfood
+  // showed them doing pure instruction-following at flagship rates, ~16% of
+  // the epic's cost for zero judgment. merge stays pinned fable below: it is
+  // the one plumbing seat doing security-load-bearing verification (PR base
+  // check before an auto-merge), and it costs pennies.
+  const setup = await agent(setupPrompt(cfg.epicId, cfg.baseBranch), { schema: SETUP_SCHEMA, phase: "setup", label: `setup:${cfg.epicId}`, model: "sonnet" });
   if (!setup || !setup.ok) {
     return { error: "setup-failed", note: setup?.note ?? "setup agent failed" };
   }
@@ -195,7 +203,7 @@ const EPIC_PR_SCHEMA = {
 
     // ── The frontier: bd sequences, we obey ───────────────────────────────────
     const frontier = await agent(frontierPrompt(cfg.epicId, wave), {
-      schema: FRONTIER_SCHEMA, phase: "frontier", label: `frontier:w${wave}`,
+      schema: FRONTIER_SCHEMA, phase: "frontier", label: `frontier:w${wave}`, model: "sonnet",
     });
     if (!frontier) { stop = "frontier-agent-failed"; break; }
     if (frontier.epicReady) { epicDone = true; break; }
@@ -230,7 +238,7 @@ const EPIC_PR_SCHEMA = {
     // both lists are empty — because it is the single producer of the
     // stopped|wave-merged-zero-slices event, and a skipped agent cannot emit it.
     const m = await agent(mergePrompt(clean, dirty, setup, cfg.epicId), {
-      schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`,
+      schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`, model: "fable",
     });
     const mergedCount = m?.mergedIds?.length ?? 0;
     journal.push(
@@ -297,7 +305,7 @@ const EPIC_PR_SCHEMA = {
   let epicPr = null;
   if (epicDone) {
     const pr = await agent(epicPrPrompt(cfg.epicId, setup, journal, cfg.baseBranch), {
-      schema: EPIC_PR_SCHEMA, phase: "epic-pr", label: `epic-pr:${cfg.epicId}`,
+      schema: EPIC_PR_SCHEMA, phase: "epic-pr", label: `epic-pr:${cfg.epicId}`, model: "sonnet",
     });
     epicPr = pr;
     journal.push(pr?.prUrl ? `epic PR opened: ${pr.prUrl} (draft — the merge is the operator's)` : `epic ready but the PR step failed: ${pr?.note || "no detail"}`);
@@ -317,7 +325,13 @@ const EPIC_PR_SCHEMA = {
 // ── Args (function declaration — hoists above the body) ──────────────────────
 
 function parseEpicArgs(args) {
-  const v = args && typeof args === "object" ? args : {};
+  // The Workflow tool may hand the object through as a JSON string — same
+  // defense as parseSpecArgs in plan-critique-improve.js.
+  let raw = args;
+  if (typeof raw === "string" && raw.trim().startsWith("{")) {
+    try { raw = JSON.parse(raw); } catch (e) { /* not JSON — falls to the empty default */ }
+  }
+  const v = raw && typeof raw === "object" ? raw : {};
   const waves = Number(v.maxWaves);
   return {
     epicId: v.epicId ? String(v.epicId).trim() : "",
@@ -516,8 +530,15 @@ function applyPrompt(id, epicId, setup, rec) {
 reviewed the promoted spec at ~/.anvil/specs/${id}.md. Use file tools and bash;
 BEADS_DIR="\${BEADS_DIR:-$HOME/.anvil/beads}". Never invoke \`forge\`.
 
-The panel's recommendations object:
-${rec ? JSON.stringify(rec, null, 2).slice(0, 20000) : "(the critique workflow returned nothing — treat as cruxes present and hold the stub)"}
+The panel's recommendations live in a FILE the synthesizer persisted:
+  "$HOME/.anvil/runs/${id}-recommendations.json"
+Read that file in full — it is the authoritative copy. Never work from an inlined
+excerpt: a truncated inline copy of a large panel once silently dropped half the
+edits and held a stub that should have promoted. Headline from the returned object,
+for orientation only:
+${rec ? `  ${rec.edits?.length ?? 0} edit(s) / ${rec.openQuestions?.length ?? 0} open question(s) / ${rec.conflicts?.length ?? 0} conflict(s).` : "  (the critique workflow returned nothing — treat as cruxes present and hold the stub)"}
+If the file is missing or unparseable, hold the stub (flippedReady=false) and say so
+in your note — this gate fails closed rather than promoting on partial evidence.
 
 1. Apply every edit with applicable=true (exact currentText → replacementText; skip any whose
    currentText no longer matches, and count it as a crux instead). Log each applied edit as a

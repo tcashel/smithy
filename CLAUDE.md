@@ -111,6 +111,21 @@ Frontmatter conventions: skills need `name` + `description`; subagents need
 `name` + `description`, plus `tools:` to restrict (reviewers/critics are
 **read-only** — no Write/Edit) and optional `model:`.
 
+**Bump the plugin version on any behavior change** (`plugins/anvil/.claude-plugin/plugin.json`).
+The installed copy lives in a version-keyed cache
+(`~/.claude/plugins/cache/smithy/anvil/<version>/`); ship a change without a bump and
+installs keep silently serving the old files.
+
+## Model roster (deliberate pins — don't "fix" them casually)
+
+Encoded in the workflow scripts, rationale in LEARNINGS §14 (priced from the first
+dogfooded epic): **implementer defaults to fable** (`implementModel:"opus"` opts a
+simple slice down; `"codex"` hands the build to the other family via a relay);
+reviewer/re-review/fix, both merge seats, replan/promotion, critic A and the
+synthesizer are fable; critic B is opus; codex legs run
+`${ANVIL_CODEX_MODEL:-gpt-5.6-sol}` at `${ANVIL_CODEX_EFFORT:-xhigh}`; relays and the
+checklist seats (setup, frontier, resolve, quality gate, PR steps) are sonnet.
+
 ## Don't commit operator state
 
 `.gitignore` excludes `~/.anvil`-style state, `.beads/`, and logs. The repo holds
