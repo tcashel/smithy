@@ -44,11 +44,14 @@
 // minting a timestamp here would break resume), it is observational and best-effort,
 // and it never changes merge policy, promotion, stop conditions, or stoppedBecause.
 // Exactly one producer per event: frontier → wave-start, stopped|no-ready-children;
-// merge → slice-merged, slice-stalled, stopped|wave-merged-zero-slices; promotion gate
-// → stub-promoted, stub-held, stopped|cut-falsified; epic-pr → epic-pr-open; setup →
-// stopped|setup-failed. The remaining stopped tokens (max-waves-reached,
-// frontier-agent-failed, epic-complete) are appended by the SESSION from the returned
-// stoppedBecause — see skills/run-epic/SKILL.md.
+// merge → slice-merged, slice-stalled, stopped|wave-merged-zero-slices (the merge agent
+// runs EVERY wave, even when the atoms returned nothing, so that stop always has its
+// producer alive); promotion gate → stub-promoted, stub-held; epic-pr → epic-pr-open;
+// setup → stopped|setup-failed. The remaining stopped tokens (max-waves-reached,
+// frontier-agent-failed, epic-complete, cut-falsified) are appended by the SESSION from
+// the returned stoppedBecause — see skills/run-epic/SKILL.md. cut-falsified in
+// particular CANNOT have a wave-agent producer: the loop breaks on majorityFalsified
+// before the promotion pipeline runs, so the session is its one emitter.
 
 export const meta = {
   name: "run-epic",
@@ -223,17 +226,17 @@ const EPIC_PR_SCHEMA = {
     const clean = atoms.filter(isClean);
     const dirty = atoms.filter((a) => !isClean(a));
 
-    let mergedCount = 0;
-    if (clean.length || dirty.length) {
-      const m = await agent(mergePrompt(clean, dirty, setup, cfg.epicId), {
-        schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`,
-      });
-      mergedCount = m?.mergedIds?.length ?? 0;
-      journal.push(
-        `wave ${wave}: merged [${(m?.mergedIds || []).join(", ") || "none"}] into ${setup.integrationBranch}; ` +
-        `stalled [${(m?.stalledIds || []).join(", ") || "none"}] at open draft PRs.`,
-      );
-    }
+    // The merge agent runs EVERY wave — even when the atoms returned nothing and
+    // both lists are empty — because it is the single producer of the
+    // stopped|wave-merged-zero-slices event, and a skipped agent cannot emit it.
+    const m = await agent(mergePrompt(clean, dirty, setup, cfg.epicId), {
+      schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`,
+    });
+    const mergedCount = m?.mergedIds?.length ?? 0;
+    journal.push(
+      `wave ${wave}: merged [${(m?.mergedIds || []).join(", ") || "none"}] into ${setup.integrationBranch}; ` +
+      `stalled [${(m?.stalledIds || []).join(", ") || "none"}] at open draft PRs.`,
+    );
     if (mergedCount === 0) {
       // A wave that lands nothing cannot unblock the next one. Fail closed.
       stop = "wave-merged-zero-slices";
@@ -337,8 +340,12 @@ function setupPrompt(epicId, baseBranch) {
 
 BASE OVERRIDE. The caller pinned this epic's base to "${baseBranch}", so the CUT does not
 come from the origin/HEAD resolution:
-  - In step 3, create the integration branch from "origin/${baseBranch}" (fall back to the
-    local "${baseBranch}" if the remote ref is absent) instead of origin/<defaultBranch>.
+  - In step 3, create the integration branch from "origin/${baseBranch}" instead of
+    origin/<defaultBranch>. If "origin/${baseBranch}" is still absent after the fetch,
+    STOP with ok=false (emitting the setup-failed stop event per step 0 first) — NEVER
+    fall back to a local "${baseBranch}"; a stale local ref cuts the epic from the wrong
+    commit, and the requested PR base may not even exist on GitHub. The cut comes from
+    origin or not at all.
   - An integration branch that already exists is still reused exactly as it is.
   - Step 2's defaultBranch is UNCHANGED — it stays the repo's real default branch, because
     it is the branch nothing in this run may ever merge into.`
@@ -428,6 +435,10 @@ draft PR open for the human and mark the bd issue blocked-on-human with a one-li
 (bd update <id> — use your version's status/note form):
 ${list(dirty)}
 
+BOTH lists empty (the wave's atoms returned nothing merge-worthy)? Then there is nothing
+to merge, stall, or touch in bd — report empty mergedIds/stalledIds, and your one job is
+the zero-merge stop event below.
+
 EVENT EMISSION — observational and BEST-EFFORT; it never changes what you merge or stall.
 One line per event, six pipe-separated fields, appended to $HOME/.anvil/runs/epic-events.log:
   anvil-epic|<utc-iso8601>|<epicId>|<event>|<sliceId>|<detail>
@@ -495,9 +506,11 @@ origin/${setup.integrationBranch} — that is what this slice will build on). Ne
    issue — the promotion gate downstream flips it only after the critique panel comes back clean.`;
 }
 
-// The promotion gate is the SINGLE emitter of stopped|cut-falsified: the replan examiner
-// upstream is deliberately writeless, and the merge agent of the same wave runs before the
-// cut is judged. The merge agent must never emit it.
+// The promotion gate emits stub-promoted / stub-held ONLY. stopped|cut-falsified has NO
+// agent producer — the loop breaks on majorityFalsified at the replan checkpoint BEFORE
+// this gate (or any other wave agent) runs — so its single emitter is the SESSION,
+// appending from the returned stoppedBecause exactly like max-waves-reached
+// (see skills/run-epic/SKILL.md). No agent prompt may emit it.
 function applyPrompt(id, epicId, setup, rec) {
   return `You are the anvil promotion gate for ${id} (epic ${epicId}). The critique panel just
 reviewed the promoted spec at ~/.anvil/specs/${id}.md. Use file tools and bash;
@@ -528,11 +541,8 @@ ${rec ? JSON.stringify(rec, null, 2).slice(0, 20000) : "(the critique workflow r
    - flippedReady=false → stub-held, detail \`${id} held — <k> crux(es) queued\` with
      <k> = cruxCount:
        mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stub-held|${id}|${id} held - <k> crux(es) queued\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
-   THIS GATE IS ALSO THE ONE AND ONLY EMITTER OF stopped|cut-falsified. If you learn from the
-   replan checkpoint that the majority of examined stubs were falsified — the epic's CUT is
-   wrong — emit it once, with an EMPTY sliceId and a detail beginning with the literal token
-   cut-falsified. No other step emits this event:
-       mkdir -p "$HOME/.anvil/runs" && printf 'anvil-epic|%s|${epicId}|stopped||cut-falsified; <one clause>\\n' "$(date -u +%FT%TZ)" >> "$HOME/.anvil/runs/epic-events.log"
+   These two are your ONLY events — in particular you never emit stopped|cut-falsified
+   (the session appends that one from the returned stoppedBecause).
    Inside EVERY field replace \`|\` with \`/\` and turn CR/LF into spaces; <detail> is one
    clause of at most 200 chars. An append failure is a warning in your note, nothing more.`;
 }
@@ -543,17 +553,23 @@ function epicPrPrompt(epicId, setup, journal, baseBranch) {
   const baseOverrideBlock = baseBranch
     ? `
 
-BASE OVERRIDE. The caller pinned this epic's base to "${baseBranch}": in step 2 pass
-\`--base ${baseBranch}\` instead of \`--base ${setup.defaultBranch}\`. Everything else,
-including the never-merge rule, is unchanged.`
+BASE OVERRIDE. The caller pinned this epic's base to "${baseBranch}": the required base is
+"${baseBranch}", not "${setup.defaultBranch}" — in step 1 retarget a reused PR whose
+baseRefName is not "${baseBranch}" with \`gh pr edit <number> --base ${baseBranch}\`, and in
+step 2 pass \`--base ${baseBranch}\`. Everything else, including the never-merge rule, is
+unchanged.`
     : "";
   return `You are the anvil epic-PR step for ${epicId}. Every child is done and merged into
 ${setup.integrationBranch}. Use Bash (gh, git). Repo: ${setup.repoRoot}. Never invoke \`forge\`.
 You NEVER merge — you open ONE draft PR and stop; the merge belongs to the operator.
 
 1. IDEMPOTENT: if a PR already exists with head ${setup.integrationBranch}
-   (\`gh pr view ${setup.integrationBranch} --json number,url\`), reuse it — update its body
-   instead of opening a second.
+   (\`gh pr view ${setup.integrationBranch} --json number,url,baseRefName\`), reuse it —
+   update its body instead of opening a second — and ENFORCE the base on reuse: if its
+   baseRefName is not the required base (${setup.defaultBranch}, unless a BASE OVERRIDE
+   below says otherwise), retarget it first with \`gh pr edit <number> --base <required>\`.
+   A reused PR silently left on the wrong base is a wrong-target merge waiting for the
+   operator.
 2. Otherwise:
      gh pr create --draft \\
        --title '${(setup.epicTitle || epicId).replace(/'/g, "'\\''").slice(0, 70)}' \\

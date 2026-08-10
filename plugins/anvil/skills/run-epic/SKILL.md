@@ -96,10 +96,12 @@ reality into beads under `BEADS_DIR="$BEADS_DIR"`; never edit a `.beads` file
 in the target repo.
 
 Then close the event log yourself. The stage agents append every other boundary
-event as it happens, but three stop tokens are only known once the workflow
+event as it happens, but four stop tokens are only known once the workflow
 returns, and the workflow body has no filesystem access. So when
-`stoppedBecause` is one of `max-waves-reached`, `frontier-agent-failed`, or
-`epic-complete`, append that one line — and only for those three — using the
+`stoppedBecause` is one of `max-waves-reached`, `frontier-agent-failed`,
+`epic-complete`, or `cut-falsified` (the runner breaks on a falsified cut
+before the promotion gate runs, so no agent is alive to emit it — you are its
+one producer), append that one line — and only for those four — using the
 returned value verbatim as the start of the detail:
 
 ```bash
