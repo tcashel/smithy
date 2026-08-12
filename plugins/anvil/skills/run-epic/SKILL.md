@@ -94,8 +94,11 @@ forged epic submit --epic <epic-id>
 ```
 
 Resolve means the lead agent or user has updated/adjudicated the held spec or
-input. Submit again after resolve; it starts the next controller generation
-only when the previous one is no longer live.
+input. For a child-specific stop, resolve clears the old terminal binding so
+the next wave starts a fresh child run generation from the adjudicated spec;
+it never silently accepts the unclean run. Submit again after resolve; it
+starts the next controller generation only when the previous one is no longer
+live.
 
 For a child run, use the run/session commands documented by
 `/anvil:dispatch`, including boundary-safe roster revision and Herdr messages.
