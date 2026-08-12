@@ -239,7 +239,8 @@ const stage = (title, fn) => fn;
         // Checklist seats (resolve, quality, draft-PR) run sonnet: the epic
         // dogfood showed them producing 700-7k output tokens of pure
         // instruction-following at flagship rates — ~16% of the epic's cost
-        // for zero judgment. The merge/review/fix seats stay on fable.
+        // for zero judgment. The judgment seats (implement, review, fix) keep
+        // the flagship tier.
         model: "sonnet",
       });
       if (!r) return { ...item, ready: false, status: "skipped", note: "resolve agent failed" };
@@ -251,14 +252,18 @@ const stage = (title, fn) => fn;
       if (item.ready === false) {
         return { ...item, status: "skipped", note: item.note ?? "spec not resolvable" };
       }
-      // Deliberate pin, not drift: the toil seat defaults to fable. The epic
-      // dogfood priced the escape path — wave 2's review+fix loop cost ~5x its
-      // opus implement stage after 10 BLOCKER/HIGH escapes, all of which the
-      // fable fix agent then cleared in one round — so the strongest model sits
-      // where the defects originate. Overrides per run: implementModel:"opus"
-      // for simple slices, or "codex" to hand the build to the other model
-      // family via the relay below (the fable reviewer then judges work from a
-      // family whose blind spots it does not share). The codex seat is a relay
+      // Deliberate pin, not drift: the strongest available model sits where the
+      // defects originate. The epic dogfood priced that — wave 2's review+fix
+      // loop cost ~5x its implement stage after 10 BLOCKER/HIGH escapes, all of
+      // which one fix round then cleared. The seat ran fable until that tier's
+      // quota was exhausted (2026-08-12) and now runs opus; restore fable here
+      // first when it returns. Overrides per run: implementModel:"codex" hands
+      // the build to the other family via the relay below at
+      // gpt-5.6-sol/xhigh — the strongest model available to this pipeline —
+      // and the opus reviewer then judges work from a family whose blind spots
+      // it does not share. That is the right call for a hard slice and it
+      // spends a different quota pool; it is NOT the default only because the
+      // relay has not yet been exercised on a real build. The codex seat is a relay
       // subagent shelling to the codex CLI — the one sanctioned CLI spawn
       // (cardinal rule) — not a return to the spawned-claude shape LEARNINGS
       // §11 retired.
@@ -273,7 +278,7 @@ const stage = (title, fn) => fn;
             schema: implementSchema,
             phase: "implement",
             label: `implement:${item.id}`,
-            model: implementModel || "fable",
+            model: implementModel || "opus",
           });
       if (!r) return { ...item, implemented: false, note: "implement agent failed" };
       return { ...item, ...r };
@@ -372,7 +377,7 @@ async function runReview(item, label) {
     } catch (e) { /* try the next name */ }
   }
   log(`${label}: anvil-reviewer agent type unavailable — falling back to the default subagent with an inline rubric (install the anvil plugin and run /reload-plugins to use the dedicated reviewer).`);
-  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "fable" });
+  return agent(`${REVIEWER_RUBRIC}\n\n${reviewPrompt(item)}`, { ...opts, model: "opus" });
 }
 
 // ── Two reviewers, two model families, run concurrently ──────────────────────
@@ -560,7 +565,7 @@ honestly. Use Bash. Working directory: ${item.worktree}
 \`command -v codex\`. If it is not on PATH, STOP: return implemented=false with a note
 saying the codex CLI is not installed. Do NOT implement the spec yourself — a build
 from the wrong seat defeats the operator's choice, and an honest failure lets them
-re-run with implementModel:"fable" instead.
+re-run without implementModel (the default Claude seat) instead.
 
 ## 2. Build the instruction file
 \`mkdir -p ${dir}\`, then write ${dir}/prompt.txt containing, in order:
@@ -803,8 +808,9 @@ ${(item.review?.findings || [])
 // or { ids: [...], baseRef?, implementModel? }. The object extras exist for the
 // epic wave runner (run-epic.js): baseRef points every atom at an integration
 // branch instead of the default branch, and implementModel overrides the
-// implementer seat for this run — "opus" for simple slices, "codex" for the
-// cross-family relay build; unset means fable. Bare ids keep working unchanged —
+// implementer seat for this run — "codex" for the cross-family relay build at
+// gpt-5.6-sol/xhigh, "sonnet" for a genuinely trivial slice; unset means opus.
+// Bare ids keep working unchanged —
 // and with no overrides every prompt below is byte-identical to the
 // no-override form, so resumed runs still replay from cache.
 function parseAtomArgs(args) {

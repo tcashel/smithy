@@ -243,7 +243,7 @@ const EPIC_PR_SCHEMA = {
     // both lists are empty — because it is the single producer of the
     // stopped|wave-merged-zero-slices event, and a skipped agent cannot emit it.
     const m = await agent(mergePrompt(clean, dirty, setup, cfg.epicId), {
-      schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`, model: "fable",
+      schema: MERGE_SCHEMA, phase: "merge", label: `merge:w${wave}`, model: "opus",
     });
     const mergedCount = m?.mergedIds?.length ?? 0;
     journal.push(
@@ -258,7 +258,7 @@ const EPIC_PR_SCHEMA = {
 
     // ── Replan checkpoint: next stubs vs merged reality ───────────────────────
     const replan = await agent(replanPrompt(cfg.epicId, setup), {
-      schema: REPLAN_SCHEMA, phase: "replan", label: `replan:w${wave}`, model: "fable",
+      schema: REPLAN_SCHEMA, phase: "replan", label: `replan:w${wave}`, model: "opus",
     });
     if (replan) {
       for (const f of replan.falsified || []) {
@@ -279,7 +279,7 @@ const EPIC_PR_SCHEMA = {
         const promoted = await pipeline(
           promotable,
           (p) => agent(promotePrompt(p, cfg.epicId, setup), {
-            schema: PROMOTE_SCHEMA, phase: "replan", label: `promote:${p.id}`, model: "fable",
+            schema: PROMOTE_SCHEMA, phase: "replan", label: `promote:${p.id}`, model: "opus",
           }),
           async (pr, p) => {
             if (!pr || !pr.specWritten) return { id: p.id, flippedReady: false, cruxCount: -1, note: pr?.note || "promotion draft failed" };
@@ -292,7 +292,7 @@ const EPIC_PR_SCHEMA = {
           (r, p) => {
             if (r && r.flippedReady === false && r.cruxCount === -1) return r; // draft failed upstream
             return agent(applyPrompt(p.id, cfg.epicId, setup, r?.rec), {
-              schema: APPLY_SCHEMA, phase: "replan", label: `gate:${p.id}`, model: "fable",
+              schema: APPLY_SCHEMA, phase: "replan", label: `gate:${p.id}`, model: "opus",
             });
           },
         );

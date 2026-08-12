@@ -243,19 +243,24 @@ const RECOMMENDATIONS_SCHEMA = {
 
 // ─── The two critic angles ──────────────────────────────────────────────────
 //
-// Deliberately different lenses AND different models so the critics' blind
-// spots differ on both axes. We index into this list (no randomness) and pass
-// each entry's `model` explicitly via opts.model (the anvil-critic agent
-// definition pins no model); the synthesizer is told each critic's angle so it
-// can reason about WHY a finding might be single-critic-only. Spec quality is
-// the highest-leverage phase, so the strongest model (fable) takes the
-// correctness lens and a different model (opus) takes the completeness lens;
-// genuine cross-FAMILY diversity is the codex leg's job, not B's.
+// Deliberately different lenses so the critics' blind spots differ. We index
+// into this list (no randomness) and pass each entry's `model` explicitly via
+// opts.model (the anvil-critic agent definition pins no model); the synthesizer
+// is told each critic's angle so it can reason about WHY a finding might be
+// single-critic-only.
+//
+// A ran fable against B's opus until that tier's quota was exhausted
+// (2026-08-12); both now run opus, so the two Claude legs differ by ANGLE only
+// — restore A to fable when it returns. The panel's family balance is
+// unchanged either way (two Claude legs, one codex), and genuine cross-FAMILY
+// diversity was always the codex leg's job, not B's. When a plan map deserves
+// maximum firepower, the operator's lever is a second codex angle, not a
+// third Claude one.
 
 const CRITIC_ANGLES = [
   {
     label: "A",
-    model: "fable",
+    model: "opus",
     angle: "Correctness & contracts",
     focus:
       "Hunt for vague/untestable acceptance criteria, undefined error & empty-input behavior, contradictions between sections, and file paths the spec cites but that may not exist. Verify every path against the repo with read-only tools. Assume a literal-minded agent that interprets any ambiguity in the worst way.",
@@ -446,10 +451,13 @@ const DECOMP_SYNTH_ADDENDUM = [
   phase("synthesize");
   log("Synthesizing critiques → corroborated / single-critic / conflicting + open questions…");
 
-  // Synthesis is a planning-phase judgment call — run it on the strongest model.
+  // Synthesis is a planning-phase judgment call — run it on the strongest model
+  // that can emit a schema directly. It stays a Claude seat for that reason: the
+  // codex legs are relays whose output another agent has to extract, and this
+  // step's product IS the validated recommendations object.
   const recommendations = await agent(buildSynthPrompt(spec, critiqueA, critiqueB, critiqueC, mode), {
     schema: RECOMMENDATIONS_SCHEMA,
-    model: "fable",
+    model: "opus",
     phase: "synthesize",
     label: "synthesizer",
   });
