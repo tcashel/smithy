@@ -1,7 +1,7 @@
 {
   "name": "anvil",
   "description": "Shape work on the anvil: a non-invasive, operator-scoped pipeline that turns an idea into a near-mergeable PR without watching the session. Plan and lock a spec, run a two-critic panel, adjudicate the cruxes, then dispatch \u2192 review \u2192 auto-fix over a beads ready-frontier. Nothing is committed into your repo or its CLAUDE.md.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "license": "SEE LICENSE IN LICENSE",
   "author": {
     "name": "Tripp Cashel"

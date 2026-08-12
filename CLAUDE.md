@@ -127,12 +127,29 @@ installs keep silently serving the old files.
 ## Model roster (deliberate pins — don't "fix" them casually)
 
 Encoded in the workflow scripts, rationale in LEARNINGS §14 (priced from the first
-dogfooded epic): **implementer defaults to fable** (`implementModel:"opus"` opts a
-simple slice down; `"codex"` hands the build to the other family via a relay);
-reviewer/re-review/fix, both merge seats, replan/promotion, critic A and the
-synthesizer are fable; critic B is opus; codex legs run
-`${ANVIL_CODEX_MODEL:-gpt-5.6-sol}` at `${ANVIL_CODEX_EFFORT:-xhigh}`; relays and the
-checklist seats (setup, frontier, resolve, quality gate, PR steps) are sonnet.
+dogfooded epic). The rule the pins express: **the strongest available model sits
+on the judgment seats; checklist seats run cheap; family diversity is bought
+deliberately, never accidentally.**
+
+Current: **implementer defaults to opus** (`implementModel:"codex"` hands the
+build to the other family at gpt-5.6-sol/xhigh — the strongest model this
+pipeline can reach, and a different quota pool; `"sonnet"` opts a trivial slice
+down). Reviewer/re-review, the merge seat, replan/promotion, critic A, critic B
+and the synthesizer are opus; codex legs (critic C, second reviewer, optional
+implementer) run `${ANVIL_CODEX_MODEL:-gpt-5.6-sol}` at
+`${ANVIL_CODEX_EFFORT:-xhigh}`; relays and the checklist seats (setup, frontier,
+resolve, quality gate, PR steps) are sonnet. Seats with **no** `model:` — the fix
+seat — inherit the session's model, so they follow whatever the operator is
+running.
+
+**These were fable seats until 2026-08-12**, when that tier's quota ran out
+mid-program. Restore fable to the implementer, critic A, and the synthesizer
+first when it returns — those are where the tier difference paid. Two
+consequences of the swap are worth knowing: critics A and B are now the same
+model and differ by ANGLE only (the panel's family balance is unchanged — two
+Claude legs, one codex), and the synthesizer stays a Claude seat because it must
+emit a validated schema, which a codex relay cannot do without an extraction
+step.
 
 ## Don't commit operator state
 
