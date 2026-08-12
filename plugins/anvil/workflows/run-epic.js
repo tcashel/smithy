@@ -132,10 +132,12 @@ const REPLAN_SCHEMA = {
         properties: {
           id: { type: "string" },
           broken: { type: "string", description: "Which ASSUMES broke, and what reality is instead." },
+          blockedOnPriorWave: { type: "boolean", description: "True when the ONLY reason the assumption reads broken is that a PRIOR-wave sibling is stalled/unmerged (its work exists but has not landed on the integration branch). Genuinely-wrong assumptions leave this false." },
         },
       },
     },
-    majorityFalsified: { type: "boolean", description: "True when most examined stubs had a broken assumption — the CUT is wrong; stop and hand back." },
+    majorityFalsified: { type: "boolean", description: "True when most examined stubs had a GENUINELY broken assumption (not merely blockedOnPriorWave) — the CUT is wrong; stop and hand back." },
+    majorityBlockedOnPriorWave: { type: "boolean", description: "True when most examined stubs are held back ONLY because prior-wave siblings are stalled/unmerged — the cut is fine; the wave needs finishing, not recutting." },
     note: { type: "string" },
   },
 };
@@ -258,6 +260,11 @@ const EPIC_PR_SCHEMA = {
     if (replan) {
       for (const f of replan.falsified || []) {
         journal.push(`replan w${wave}: ${f.id} held back — ${f.broken || "assumption broke"}`);
+      }
+      if (replan.majorityBlockedOnPriorWave) {
+        stop = "wave-incomplete";
+        journal.push(`replan w${wave}: majority of stubs are waiting on stalled prior-wave slices — the cut holds; finish the stalled slices and re-run the epic.`);
+        break;
       }
       if (replan.majorityFalsified) {
         stop = "cut-falsified";
@@ -492,9 +499,18 @@ happens downstream with the critique panel.
    evidence. ALL items held → the stub goes in promotable, with the per-item evidence. ANY item
    broken → falsified, with what reality is instead. An item you cannot check either way counts
    as broken — promotion runs on proof, not optimism.
-4. majorityFalsified=true when more than half of the stubs you examined had a broken
-   assumption: that pattern means the CUT is wrong, and recutting the epic is the operator's
-   call, not yours.`;
+4. Distinguish WHY an assumption reads broken. If the only failure is that a PRIOR-WAVE
+   sibling slice is stalled/unmerged (bd shows it blocked/stalled, its work exists but has
+   not landed on the integration branch), mark that falsified entry
+   blockedOnPriorWave=true — the assumption is not wrong, it is EARLY. A genuinely wrong
+   assumption (reality contradicts it, or it is unverifiable even with all prior waves
+   merged) leaves blockedOnPriorWave false.
+5. majorityFalsified=true when more than half of the stubs you examined had a GENUINELY
+   broken assumption (blockedOnPriorWave=false): that pattern means the CUT is wrong, and
+   recutting the epic is the operator's call, not yours.
+   majorityBlockedOnPriorWave=true when more than half are held back ONLY by stalled
+   prior-wave siblings: the cut is fine — the run should stop as wave-incomplete so the
+   operator finishes the stalled slices and re-runs, not recut.`;
 }
 
 function promotePrompt(p, epicId, setup) {
@@ -536,7 +552,7 @@ Read that file in full — it is the authoritative copy. Never work from an inli
 excerpt: a truncated inline copy of a large panel once silently dropped half the
 edits and held a stub that should have promoted. Headline from the returned object,
 for orientation only:
-${rec ? `  ${rec.edits?.length ?? 0} edit(s) / ${rec.openQuestions?.length ?? 0} open question(s) / ${rec.conflicts?.length ?? 0} conflict(s).` : "  (the critique workflow returned nothing — treat as cruxes present and hold the stub)"}
+${(() => { const r = rec?.recommendations ?? rec; return r ? `  ${r.edits?.length ?? 0} edit(s) / ${r.openQuestions?.length ?? 0} open question(s) / ${r.conflicts?.length ?? 0} conflict(s).` : "  (the critique workflow returned nothing — treat as cruxes present and hold the stub)"; })()}
 If the file is missing or unparseable, hold the stub (flippedReady=false) and say so
 in your note — this gate fails closed rather than promoting on partial evidence.
 
