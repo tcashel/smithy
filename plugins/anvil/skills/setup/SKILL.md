@@ -25,6 +25,13 @@ accepted), and `forged` with `run submit` and `epic submit` in its help. Provide
 CLIs are required only when referenced by the selected roster. Herdr is
 optional but recommended for pane visibility and live intervention.
 
+Retain the selected Beads command for every later setup check:
+
+```sh
+BD_BIN="$(command -v bd || command -v br)"
+test -n "$BD_BIN"
+```
+
 If `forged` is absent or too old, stop and ask the operator for the Forge
 checkout/release they want installed. Do not substitute the removed Workflow
 scripts. Any install requires explicit consent.
@@ -99,7 +106,7 @@ In a real target repo selected by the operator:
 
 ```sh
 git status --porcelain
-BEADS_DIR="$BEADS_DIR" bd ready
+BEADS_DIR="$BEADS_DIR" "$BD_BIN" ready
 test ! -e .beads
 git status --porcelain
 ```
