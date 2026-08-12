@@ -644,6 +644,14 @@ Working directory: ${item.worktree}
 Never invoke the \`forge\` binary.
 
 1. Push the branch: \`git -C ${item.worktree} push -u origin ${item.branch}\`.
+   If the SSH push fails with agent/signing errors (\`sign_and_send_pubkey\`,
+   "communication with agent failed", "agent refused operation" — a locked
+   1Password/keychain agent, common headless), DO NOT give up: retry over
+   HTTPS with gh's token, which needs no SSH agent:
+     git -C ${item.worktree} -c credential.helper='!gh auth git-credential' \\
+       push -u https://github.com/<owner>/<repo>.git ${item.branch}
+   (derive <owner>/<repo> from \`gh repo view --json nameWithOwner\` in the
+   worktree). Only report blocked if BOTH transports fail.
 2. IDEMPOTENT: if a PR already exists for this head branch
    (\`gh pr view ${item.branch} --json number,url\` succeeds), REUSE it — do not
    open a second. This is the durable run-state we rely on across re-runs.
@@ -782,7 +790,9 @@ ${(item.review?.findings || [])
 1. cd ${item.worktree}; make the fixes; re-run the quality commands.
 2. Commit ONLY intentionally-changed files (\`git add <path>\`, conventional
    commit \`fix(review): address reviewer feedback (round ${round})\`) and
-   \`git push\`. If there is nothing to change, report applied=false.
+   \`git push\` (if SSH fails with agent/signing errors, retry over HTTPS:
+   \`git -c credential.helper='!gh auth git-credential' push https://github.com/<owner>/<repo>.git <branch>\`).
+   If there is nothing to change, report applied=false.
 3. Do NOT mark the PR ready, do NOT merge — the atom STOPS after this round and
    the human adjudicates. Report what you changed.`;
 }
