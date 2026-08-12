@@ -4,9 +4,8 @@ description: "Adversarial, read-only critique of an anvil task spec. Verifies ev
 tools: Read, Grep, Glob, Bash
 ---
 
-<!-- No model pin: the plan-critique-improve workflow sets a DIFFERENT model per
-     critic invocation (opts.model) so the two critics' blind spots genuinely
-     differ. Invoked ad hoc, the critic inherits the session model. -->
+<!-- No model pin: /anvil:critique chooses a proportional topology and the
+     current harness selects available providers/models. -->
 
 # Anvil Spec Critic
 

@@ -1,6 +1,6 @@
 ---
 name: adjudicate
-description: "Walks the operator through every unresolved CRUX in an anvil-spec-recommendations document one at a time — conflicting critic findings and open questions — captures the resolution, writes it back into the spec body at ~/.anvil/specs/<id>.md, and gates: the spec cannot leave adjudication with any crux unresolved. When clean, flips the bd issue to ready."
+description: "Walks the operator through every unresolved CRUX in an anvil-spec-recommendations document one at a time — conflicting critic findings and open questions — captures the resolution, writes it back into the operator-scoped spec body, and gates: the spec cannot leave adjudication with any crux unresolved. When clean, flips the bd issue to ready."
 ---
 
 # anvil:adjudicate
@@ -49,7 +49,12 @@ CRUX <n> of <total>  [CONFLICT | OPEN QUESTION]   severity: BLOCKER|HIGH|MEDIUM|
   Choose:  A   B   E)dit (type your own resolution)   S)kip
 ```
 
-For a **conflict**, A and B are the opposing positions, quoted faithfully (preserve the higher severity per the synthesizer rule). Keep the loop two-way even when a third critic weighed in: if the conflict carries a `criticCPosition` (the codex leg took a side), fold it into whichever option it backs and say so on that line — *"B) … (codex agrees)"*. A cross-family second is worth knowing about; a third keystroke is not. For an **open question**, frame A/B as the two most plausible answers the synthesizer or critics implied; if it's genuinely open-ended, present A/B as the leading candidates and lean on `E` for anything else.
+For a **conflict**, A and B are the opposing positions, quoted faithfully
+(preserve the higher severity). Keep the loop two-way even when a third critic
+weighed in: fold it into whichever option it backs and name the source. A
+cross-family second is worth knowing about; a third keystroke is not. For an
+**open question**, frame A/B as the two most plausible answers and use `E` for
+anything else.
 
 Then take the operator's choice:
 
@@ -113,18 +118,9 @@ lists the id. On a bd/br build that does expose an explicit ready verb, use that
 the contract is only: the issue leaves adjudication so `/anvil:dispatch`'s work-list
 (`bd ready`) picks it up. Confirm with `bd show <id>` and `bd ready`.
 
-Then retire the critique panel's scratch artifacts — the codex leg's prompt/log/pid
-under `~/.anvil/runs/critique/<id>/` have no reader once the spec is adjudicated,
-and nothing else sweeps that directory:
-
-```bash
-# macOS: prefer `trash` — recoverable, and home-path guard hooks allow it
-trash "$HOME/.anvil/runs/critique/<id>" 2>/dev/null \
-  || rm -rf "$HOME/.anvil/runs/critique/<id>"
-```
-
-(Keep `~/.anvil/specs/<id>.recommendations.md` — it is the audit trail of what the
-panel found; only the run scratch goes.)
+Keep `~/.anvil/specs/<id>.recommendations.md`; it is the audit trail of what
+the proportional critique found. Native host delegation owns any ephemeral
+critic session state.
 
 ## Output
 
@@ -147,7 +143,8 @@ If you stopped at the gate instead, end with what's still open and the explicit 
 - **Strip the meta from the body.** The implementing agent must never see critic-vs-critic framing or open-question language. Keep that in the adjudication log only.
 - **One crux at a time.** Crisp, keyboard-friendly, minimal ceremony. Don't re-print the whole recommendations document between decisions.
 - **Operator-scoped, zero repo imposition.** All reads and writes stay under `~/.anvil/` and `$BEADS_DIR`. Never touch the target repo, its CLAUDE.md, or its settings. Never write a `.beads` file into the repo.
-- **Never shell out to `forge`.** Use only `bd`/`br`, `git`, `gh`, and file edits.
+- **Do not start execution here.** `/anvil:dispatch` or `/anvil:run-epic`
+  performs the explicit Forged handoff after adjudication completes.
 
 ## Voice
 

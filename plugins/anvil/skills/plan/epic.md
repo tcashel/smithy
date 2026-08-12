@@ -1,8 +1,8 @@
 # The anvil epic: plan map, stubs, and slicing
 
-An **epic** is work too big for one reviewable draft PR. anvil represents it with
-bare parts only — a plan-map spec plus ordinary bd issues and dependency edges.
-The single-spec atom stays the unit of execution; an epic only *composes* atoms.
+An **epic** is work too big for one reviewable draft PR. Anvil represents the
+plan as a map plus ordinary Beads issues and dependency edges; Forged later
+freezes that inventory and composes its slice protocol in waves.
 
 **Lock late.** Only the frontier (wave 1) gets full, locked specs. Everything
 downstream stays a blocked STUB until a replan checkpoint proves its assumptions
@@ -108,10 +108,9 @@ STUB — wave <n> of epic <epic-id>. Not yet promoted; do not implement.
 - [ ] ASSUMES: <one bullet per assumption — each verifiable against merged diffs>
 ```
 
-The `- [ ] ASSUMES:` items are the whole mechanism: they keep the stub off
-`bd ready` via the existing open-questions lock gate, and they are what the
-replan checkpoint verifies against the integration branch's merged reality
-before promotion. Promotion = resolve the ASSUMES items with evidence, expand
-the stub to the full schema, then run the normal critique → adjudicate path.
-A stub whose assumption broke stays blocked, with the falsification noted —
-that is the gate doing its job, not a failure.
+The `- [ ] ASSUMES:` items keep the stub off `bd ready`. When Forged reaches a
+no-ready boundary it records `inputRequired`; the lead agent then verifies the
+assumptions against the integration branch, expands the stub, and runs the
+normal critique → adjudicate path. After promotion it calls `forged epic
+resolve` and resubmits. Forged does not invent a cognitive replan. A broken
+assumption stays blocked with its evidence—that is the gate working.

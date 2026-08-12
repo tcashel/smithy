@@ -1,6 +1,6 @@
 ---
 name: plan
-description: "Activates when the operator wants to turn an idea — or a plan-mode plan they just produced — into a locked anvil spec, or into an epic (plan map + wave-1 specs + blocked stubs) when the work is too big for one reviewable PR. Collaborate in plan mode to draft, write bodies to ~/.anvil/specs/<id>.md, create matching beads issues (with dependency edges for an epic) so work joins the ready-frontier, and enforce the open-questions lock gate. Use when the operator says they want to run something through anvil, when they've just produced a plan to ship to a coding agent, or when they invoke /anvil:plan."
+description: "Activates when the operator wants to turn an idea — or a plan-mode plan they just produced — into a locked operator-scoped Anvil spec, or into an epic (plan map + wave-1 specs + blocked stubs) when the work is too big for one reviewable PR. Collaborate in plan mode, create matching Beads issues and dependency edges, and enforce the open-questions lock gate. Use when the operator wants to run something through Anvil or invokes /anvil:plan."
 ---
 
 # /anvil:plan
@@ -13,15 +13,19 @@ anvil is **operator-scoped and non-invasive**. Everything you produce lives OUT 
 - The spec's place in the work-list is a beads issue in `$BEADS_DIR` (default `~/.anvil/beads`).
 - You never commit a spec into the repo, never edit the repo's `CLAUDE.md`, never touch repo settings, and never write a per-worktree file.
 
-There is **no `forge` binary** in this world. You use only `bd`/`br`, `git`, plan mode, and ordinary file tools. If you ever reach for `forge spec save` or any `forge ...` command, stop — the anvil equivalent is "write the file + create a bd issue" below.
+Planning writes the spec and Beads graph directly. Do not start Forged here:
+the user has not approved the direction yet, and `/anvil:dispatch` or
+`/anvil:run-epic` owns that explicit handoff.
 
 ## What anvil does with your output
 
 The spec you lock here is picked up downstream:
 
-1. `/anvil:critique` runs the critic panel against the spec body and synthesizes recommendations.
+1. `/anvil:critique` applies a proportional independent review and synthesizes recommendations.
 2. `/anvil:adjudicate` resolves the cruxes and produces the improved, locked spec.
-3. `/anvil:dispatch` reads `bd ready` (honoring `$BEADS_DIR`), has an implementing subagent build the spec body in a disposable worktree, runs the quality gate, opens a **draft** PR, reviews it with both reviewers (`anvil-reviewer` plus the codex relay when installed), and applies one auto-fix round — then stops for the operator to adjudicate the merge.
+3. `/anvil:dispatch` reads `bd ready`, freezes a proportional profile and
+   provider roster, and submits the work to Forged. Forged implements, gates,
+   reviews, remediates as the stored profile requires, and stops at a draft PR.
 
 The launched agent sees **only the spec body**. Not this conversation, not your research notes, not the repo's `CLAUDE.md`. Anything the agent needs must be inside `~/.anvil/specs/<id>.md`. A vague spec produces a confused agent. That single fact is why this skill exists.
 
@@ -36,14 +40,11 @@ In both cases the operator expects, at the end, a spec file on disk and a matchi
 
 ## Workflow
 
-You progress through four short phases. Each has a companion file (`research.md`, `schema.md`, `epic.md`, `checklist.md`) you `read` only when you reach it — don't pull them all up front. They live in this skill's own directory. **`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text**, so resolve the directory at runtime:
-
-```bash
-PLAN_DIR="${ANVIL_PLUGIN_ROOT:+$ANVIL_PLUGIN_ROOT/skills/plan}"
-[ -d "$PLAN_DIR" ] || PLAN_DIR="$(find "$HOME/.claude/plugins" -type d -path '*anvil*/skills/plan' 2>/dev/null | head -1)"
-```
-
-Then `read` e.g. `$PLAN_DIR/schema.md` when you reach the relevant phase.
+You progress through four short phases. Each has a companion file
+(`research.md`, `schema.md`, `epic.md`, `checklist.md`) next to this SKILL.md.
+Read each through the host's skill-relative resource mechanism only when you
+reach it; do not pull them all up front or search provider-specific plugin
+caches.
 
 ### Phase 1 — Research (skip if a plan-mode plan already covers it)
 
@@ -159,15 +160,19 @@ After locking, surface to the operator:
 
 ## Next step
 
-Tell the operator the spec is locked and the next step is **`/anvil:critique`**, which runs the critic panel against the spec body and emits ```` ```anvil-spec-recommendations ````. Do not pre-critique your own draft here — write the cleanest spec you can and let the critique pass refine it.
+Tell the operator the spec is locked and the next step is
+**`/anvil:critique`**, which chooses a risk-proportional topology and emits an
+```` ```anvil-spec-recommendations ```` block. Do not pre-critique your own
+draft here.
 
 ## Things to avoid
 
-- **Shelling out to `forge`.** There is no `forge` binary in anvil. The whole experiment is invalid if you call it. Use `bd`/`br` + file tools for the lock step.
+- **Starting Forged before approval.** Planning uses `bd`/`br` plus file tools;
+  the dispatch skills own the later typed handoff.
 - **Writing anything into the target repo.** No `.beads/` file committed, no `CLAUDE.md` edits, no repo settings, no per-worktree file. All state lives under `~/.anvil/`.
 - **Adding YAML frontmatter or a fenced wrapper.** The spec file starts at `# <title>` and is the spec body verbatim.
 - **Locking a spec ready with open `- [ ]` questions.** This violates the lock gate. Resolve them or file the issue blocked.
 - **Citing a file you didn't open.** If the spec mentions `src/foo.ts:42`, `read` it first.
 - **Asking the agent to decide.** "Decide on the retention strategy" is a bug, not an acceptance criterion. Make the call in the spec, or list it as an open question and let the gate hold the spec back — the launched agent has far less context than you do.
-- **Vague acceptance criteria.** "Tests pass" and "code is clean" aren't checkable. The reviewer will reject them.
+- **Vague acceptance criteria.** "Tests pass" and "code is clean" are not checkable. Forged's review seats need explicit contracts.
 - **Drafting on turn 1 without research,** unless a plan-mode plan already did it.
