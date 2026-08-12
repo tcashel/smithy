@@ -1,16 +1,16 @@
 {
   "name": "anvil",
-  "version": "0.2.3",
-  "description": "Shape work on the anvil: a non-invasive, operator-scoped pipeline that turns an idea into a near-mergeable PR without watching the session. Plan and lock a spec, run a critic panel, adjudicate the cruxes, then dispatch → review → auto-fix over a beads ready-frontier. Nothing is committed into your repo or its CLAUDE.md.",
+  "version": "0.3.0",
+  "description": "Operator-scoped planning and adjudication for Forged. Shape and lock work with one lead agent, then submit provider-neutral durable slice or epic execution and reconnect through the ledger, Herdr, or MCP App.",
   "author": {
     "name": "Tripp Cashel"
   },
   "license": "SEE LICENSE IN LICENSE",
-  "keywords": ["pipeline", "planning", "code-review", "beads", "orchestration"],
+  "keywords": ["forged", "planning", "code-review", "beads", "orchestration"],
   "skills": "./skills/",
   "interface": {
     "displayName": "anvil",
-    "shortDescription": "Operator-scoped plan → critique → adjudicate → dispatch pipeline",
+    "shortDescription": "Plan and adjudicate, then hand execution to Forged",
     "category": "Development"
   }
 }

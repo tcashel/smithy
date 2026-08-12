@@ -1,183 +1,125 @@
 ---
 name: setup
-description: "One-time setup for anvil: install and configure beads (bd or br) operator-scoped, verify the table-stakes tooling (git, gh + auth, and the optional codex CLI for the cross-family critic/reviewer legs), stand up the out-of-repo state under ~/.anvil, and PROVE the install imposed nothing on any target repo. Use when the operator first installs the anvil plugin, when bd/br is missing, or when /anvil:plan or /anvil:dispatch complains that beads isn't set up."
+description: "One-time Anvil/Forged setup: establish the operator-scoped Beads and Forged state under ~/.anvil, verify git/gh/provider adapters and optional Herdr supervision, validate the YAML profile/roster config, and prove the installation imposed nothing on a target repository."
 ---
 
-# anvil setup
+# /anvil:setup — provider-neutral planning and execution substrate
 
-You are standing up the **operator-scoped, non-invasive** substrate that the rest
-of anvil depends on. When you are done, `bd ready` works, all state lives under
-`~/.anvil/` and `$BEADS_DIR`, and **nothing has been written into any target
-repository** — no `.beads/` file, no `CLAUDE.md` edit, no repo setting.
+Setup owns operator-machine configuration, never target-repository state. Ask
+before installing a binary or editing a shell profile, and show the exact
+command first.
 
-This is also a measurement. anvil exists to test (Forge ADR-0030) whether a
-bare-parts stack can deliver repo-untouched, worktree-safe planning. So as you go,
-**record exactly what setup imposed** — that log is the experiment's primary
-result, not a side note.
+## 1. Verify prerequisites
 
-## Consent rules (read first)
+Check:
 
-Setup mutates the operator's *machine* (installs binaries) and possibly their
-shell profile. It must NEVER mutate a target repo. Therefore:
-
-- **Ask before any system-level install** (`brew install`, `cargo install`,
-  `go install`, downloading a release binary). Show the exact command first.
-- **Ask before editing the shell profile** (`~/.zshrc` etc.). Offer to do it;
-  don't do it silently.
-- **Never** write into a target repo, and **never** invoke the `forge` binary.
-  anvil shells out only to `bd`/`br`, `git`, `gh`, and (optionally) `codex`;
-  every agent in the pipeline is a workflow subagent, not a spawned CLI.
-
-## Step 1 — Detect the environment
-
-```bash
-uname -s                       # Darwin / Linux
-command -v brew cargo go gh git claude codex 2>/dev/null   # what's available
+```sh
+command -v git gh bd br forged herdr claude codex 2>/dev/null
+git --version
+gh auth status
+forged --version
 ```
 
-Note the platform and which package managers exist — you'll pick the beads
-install method from this.
+Required: `git`, authenticated `gh`, one Beads binary (`bd` preferred, `br`
+accepted), and `forged` with `run submit` and `epic submit` in its help. Provider
+CLIs are required only when referenced by the selected roster. Herdr is
+optional but recommended for pane visibility and live intervention.
 
-## Step 2 — Verify the table-stakes tooling
+Retain the selected Beads command for every later setup check:
 
-These are not anvil's job to install, only to verify and guide:
-
-- **claude** — present by definition (you are running inside it). Confirm `claude --version`.
-- **git** — required. If missing, stop and tell the operator to install it.
-- **gh** — required for the dispatch/review loop. Check `gh --version` and
-  `gh auth status`. If `gh` is missing, offer (with consent) `brew install gh`
-  (macOS) or point to <https://cli.github.com>. If it's installed but not
-  authenticated, tell the operator to run `gh auth login` themselves (it's
-  interactive — suggest they type `! gh auth login` in the session).
-- **codex** *(optional, recommended)* — powers the critique panel's third critic
-  and the atom's second reviewer (cross-model-family corroboration). Check
-  `command -v codex`, then `codex login status` — it must say logged in
-  ("Logged in using ChatGPT" or an API key). If codex is absent, say so and move
-  on: both legs degrade loudly to "unavailable" and the pipeline is unaffected.
-  If it is installed but NOT logged in, warn the operator explicitly — a headless
-  leg must fail fast, never sit at a login prompt — and suggest they type
-  `! codex login` in the session. Never run `codex login` yourself.
-
-## Step 3 — Install beads (the one thing anvil specifically needs)
-
-Check first — it may already be present:
-
-```bash
-command -v bd && bd --version
-command -v br && br --version
+```sh
+BD_BIN="$(command -v bd || command -v br)"
+test -n "$BD_BIN"
 ```
 
-If neither is present, install one. **Prefer `bd`** (Go/Dolt) — it has the
-richest operator-scope story (`BEADS_DIR` git-free mode + contributor-mode
-out-of-repo planning), which is exactly what anvil leans on. Fall back to `br`
-(Rust/SQLite). Pick the method by what Step 1 found, and **ask before running it**:
+If `forged` is absent or too old, stop and ask the operator for the Forge
+checkout/release they want installed. Do not substitute the removed Workflow
+scripts. Any install requires explicit consent.
 
-- `bd` via Go:        `go install github.com/gastownhall/beads/cmd/bd@latest`
-- `bd` via release:    download the matching binary from
-  <https://github.com/gastownhall/beads/releases> into a dir on `PATH`.
-- `br` via Cargo:      `cargo install --git https://github.com/Dicklesworthstone/beads_rust`
-- `br` via release:    <https://github.com/Dicklesworthstone/beads_rust/releases>
+## 2. Stand up operator-scoped Beads state
 
-Tell the operator which binary you installed and why. If both `bd` and `br` are
-already present, prefer `bd` and say so.
+Find and run the bundled bootstrap:
 
-> Honest note for the operator: when `bd` set up *agent integration* in the past
-> it edited `CLAUDE.md`/hooks — exactly the imposition anvil avoids. Do **NOT**
-> run any `bd setup`/`bd init --with-claude` style command that writes into a
-> repo or a `CLAUDE.md`. We initialize beads ONLY in the out-of-repo `$BEADS_DIR`
-> (next step). If a beads subcommand insists on touching a repo, that's a finding
-> for the operator-scope log — record it, don't work around it by committing.
-
-## Step 4 — Stand up the operator-scoped store
-
-Run the bundled bootstrap. It creates `$BEADS_DIR` (default `~/.anvil/beads`)
-and `~/.anvil/specs/`, and runs `bd init` (or `br init`) **inside `$BEADS_DIR`**,
-never in a repo:
-
-`${CLAUDE_PLUGIN_ROOT}` is NOT expanded in skill text, so discover the plugin root
-first, then run the bundled bootstrap:
-
-```bash
+```sh
 ANVIL_PLUGIN_ROOT="$(find "$HOME/.claude/plugins" "$HOME/repositories" "$HOME/repos" "$HOME/src" \
   -type f -name install-beads.sh -path '*anvil*/bootstrap*' 2>/dev/null | head -1 \
   | xargs -r dirname | xargs -r dirname)"
-echo "anvil plugin root: $ANVIL_PLUGIN_ROOT"
-
-"$ANVIL_PLUGIN_ROOT/bootstrap/install-beads.sh"     # ANVIL_HOME=~/work/anvil to relocate
+"$ANVIL_PLUGIN_ROOT/bootstrap/install-beads.sh"
 ```
 
-The script prints the operator-scope checklist — keep its output. You'll persist
-`ANVIL_PLUGIN_ROOT` in the next step so the other skills can locate the workflows.
+It creates `${ANVIL_HOME:-$HOME/.anvil}/{beads,specs}` and initializes Beads
+inside `$BEADS_DIR`, not the current repository.
 
-## Step 5 — Persist `BEADS_DIR` and `ANVIL_PLUGIN_ROOT`
+## 3. Initialize and validate Forged
 
-Every anvil skill and workflow honors `$BEADS_DIR`, and the workflow-invoking skills
-(`/anvil:critique`, `/anvil:dispatch`) resolve their bundled scripts via
-`$ANVIL_PLUGIN_ROOT` (because `${CLAUDE_PLUGIN_ROOT}` is unusable from skill text —
-see Step 4). Persist both:
+With the same environment:
 
-Persist them **together** — they are one block, not two errands. Every skill that
-re-derives `BEADS_DIR` from a default is a skill that can disagree with the operator's
-actual store, so write it down once:
-
-```bash
-export BEADS_DIR="$HOME/.anvil/beads"           # or the ANVIL_HOME the operator chose
-export ANVIL_PLUGIN_ROOT="$ANVIL_PLUGIN_ROOT"   # the value discovered in Step 4
+```sh
+export ANVIL_HOME="${ANVIL_HOME:-$HOME/.anvil}"
+export BEADS_DIR="${BEADS_DIR:-$ANVIL_HOME/beads}"
+forged init
+forged doctor
+forged definition validate
 ```
 
-Offer to append that block to their shell profile (`~/.zshrc` on this platform) — and
-**ask before editing it**. Show the exact lines first, and check whether either export
-is already there before appending, so a re-run doesn't stack duplicates. If they
-decline, tell them to export both themselves; skills do fall back to `~/.anvil/beads`
-for `BEADS_DIR` and to a `find` over `~/.claude/plugins` for the plugin root, but a
-fallback is a guess and an export is a fact.
+`forged init` writes `$ANVIL_HOME/config.yaml` and the ledger schema. If the
+generated `bd_path` does not match the installed Beads binary, update that
+operator-scoped YAML field to the absolute `command -v bd`/`br` result, then
+rerun doctor. Never solve this by adding config to a target repo.
 
-## Step 6 — Prove zero repo imposition (the decisive check)
+The YAML owns named assurance profiles (`lean`, `standard`, `high`), ordered
+provider/model rosters, gate commands, retry budgets, `host_policy`, and
+`herdr_sock`. Validate after every edit:
 
-This is the experiment's question #1. From inside a REAL target repo the operator
-names (ideally a worktree-heavy one), confirm the stack reads/writes its
-frontier **without touching the repo**:
-
-```bash
-cd <some target repo>
-git status --porcelain > /tmp/anvil-before
-BEADS_DIR="$HOME/.anvil/beads" bd ready          # should work, list nothing yet
-ls -a .beads 2>/dev/null && echo "IMPOSITION: .beads dir present in repo!"
-git status --porcelain > /tmp/anvil-after
-diff /tmp/anvil-before /tmp/anvil-after && echo "CLEAN: repo untouched ✓"
+```sh
+forged definition validate --profile standard --roster default
 ```
 
-Record honestly:
+Changing the default/named roster affects future runs. A live run changes
+roster only through `forged run revise-roster` at a durable boundary.
 
+## 4. Verify Herdr honestly
+
+If Herdr is installed, verify its socket (normally
+`$HOME/.config/herdr/herdr.sock`) and confirm `forged doctor` reports it. Keep
+`host_policy: preferred` for visible fallback, use `required` only when the
+operator wants execution to refuse without Herdr, and `off` only deliberately.
+Never report a process fallback as a Herdr session.
+
+## 5. Persist the shared state location
+
+Offer—do not silently perform—to add the chosen values to the shell profile:
+
+```sh
+export ANVIL_HOME="<resolved absolute ANVIL_HOME>"
+export BEADS_DIR="<resolved absolute BEADS_DIR>"
 ```
-operator-scope log
-  [ ] Installing beads touched NO target repo                 (expected: pass)
-  [ ] `bd ready` from inside a repo created nothing in it     (expected: pass)
-  [ ] No .beads/ file appeared in the repo or any worktree    (expected: pass)
-  [ ] No CLAUDE.md / repo setting was modified                (expected: pass)
-  [ ] Worktrees do NOT each need their own committed file     (expected: pass)
+
+Replace both placeholders with the values resolved during setup; never reset a
+custom home to `$HOME/.anvil`. Check for existing exports before appending. The
+plugin root no longer needs to be persisted: execution Workflow files were
+removed.
+
+## 6. Prove zero repo imposition
+
+In a real target repo selected by the operator:
+
+```sh
+git status --porcelain
+BEADS_DIR="$BEADS_DIR" "$BD_BIN" ready
+test ! -e .beads
+git status --porcelain
 ```
 
-Any box that fails is not a bug to patch around — it's the answer to whether the
-operator-scoped differentiator is real or just config. Surface it to the operator.
+Record whether Beads/Forged created any repository file, changed
+`CLAUDE.md`/settings, or required per-worktree state. Expected: no to all.
+State belongs under `$ANVIL_HOME`; worktrees/branches/PRs appear only after an
+explicit dispatch.
 
-## Step 7 — Report
+## Report
 
-Tell the operator, concisely:
-
-- Which beads binary is installed (`bd`/`br`) and its version.
-- Where state lives (`$BEADS_DIR`, `~/.anvil/specs/`).
-- `gh` auth status and any remaining manual step (e.g. `gh auth login`).
-- `codex` status: absent / installed-but-unauthenticated / ready — and what that
-  means for the panel (two critics vs three, one reviewer vs two).
-- The operator-scope log result.
-- Next step: **`/anvil:plan`** to draft and lock the first spec.
-
-## What you must never do
-
-- Install anything, or edit the shell profile, without showing the command and
-  getting consent first.
-- Write a `.beads/` file, a `CLAUDE.md`, or any file into a target repo or worktree.
-- Run a `bd`/`br` subcommand that edits a repo's `CLAUDE.md` or settings.
-- Invoke the `forge` binary. anvil is the bare-parts stack — it has no Forge.
-- Silently "fix" an imposition by committing it. Log it instead.
+Report exact binary versions, `gh` auth, selected Beads path, config/ledger
+paths, available provider adapters, Herdr status/policy, definition validation,
+and the repo-imposition check. The next step is `/anvil:plan`; after the user
+accepts and locks the direction, `/anvil:dispatch` or `/anvil:run-epic` hands it
+to Forged.

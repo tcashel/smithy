@@ -1,10 +1,23 @@
-# LEARNINGS — what Forge taught us that is portable to bare skills
+# LEARNINGS — evidence from the Anvil bare-parts experiment
 
-Durable engineering notes, not marketing. Forge (the TypeScript prototype) ran the
-plan -> critique -> adjudicate -> dispatch -> review -> fix pipeline as a real app.
-anvil is the experiment that asks whether that value reassembles from bare Claude Code
-primitives — skills, the Workflow tool, subagents, and beads. These are the lessons
-worth carrying across, each with the reason it bit us.
+Durable engineering notes, not marketing. These sections preserve the evidence
+from Anvil's Claude Workflow implementation, including approaches that are no
+longer active.
+
+## 0. Outcome: keep the lead-agent UX; move execution into Forged
+
+The experiment answered its question. A single lead-agent conversation plus
+Anvil planning/adjudication skills is the right front door. The execution stack
+was not: provider-specific Workflow state, fixed large panels, shell detachment,
+and scheduled re-invocation duplicated orchestration and made continuation
+depend on one harness.
+
+As of Anvil 0.3, Smithy owns planning through spec lock. Forged owns cognitive
+stage contracts, proportional topology, provider/model roster resolution,
+dispatch, gates, review/remediation, epic waves, durable handoff, and results.
+Herdr owns process/pane transport. The old execution workflows and watch layer
+were deleted, while the evidence below remains to explain why the replacement
+has the contracts it does.
 
 ## 1. The spec is the sole input
 

@@ -2,156 +2,92 @@
 
 ## What this repo is
 
-**smithy** is a personal Claude Code **plugin marketplace**. It ships one plugin,
-**anvil**: a non-invasive, operator-scoped pipeline —
-`plan → critique → adjudicate → dispatch → review → fix` — reassembled from bare
-Claude Code primitives (skills, the Workflow tool, subagents) plus the **beads**
-issue tracker (`bd`/`br`) as the work-item store.
+**smithy** is a personal Claude Code and Codex plugin marketplace. It ships
+**anvil**, the operator-scoped planning front end for Forged:
 
-You are almost always here to **author or maintain the anvil plugin**, not to run
-it. (Running it happens in some *other* repo, via the installed skills.)
+`plan → proportional critique → adjudicate → forged handoff → reviewed draft PR`
 
-## Why anvil exists (don't lose the thread)
+The user talks to one lead agent. Anvil helps that session shape and lock the
+work; after approval, the dispatch skills call Forged's typed CLI/MCP contracts
+and may disconnect. Forged owns long-horizon execution.
 
-anvil is the bare-parts arm of a deliberate experiment owned by the sibling
-**Forge** repo, ADR-0030: now that Claude Code ships Workflows/Routines/subagents
-and beads ships the dependency graph, *does Forge's value reassemble from bare
-parts, or does the bespoke app still earn its keep?* anvil reassembles the loop
-from bare parts so we can find out. Two cardinal rules follow from that and
-**must never be violated** — breaking either invalidates the experiment:
+## Ownership rules
 
-1. **anvil MUST NEVER shell out to the `forge` binary.** Use only `gh`, `bd`/`br`,
-   `git`, `codex` (the optional second critic and second reviewer), and the
-   Workflow tool. Every agent is a workflow subagent, not a spawned CLI — see
-   LEARNINGS §11 for why the implement stage stopped spawning `claude`. If you
-   reach for `forge ...`, stop and use the bare equivalent.
-2. **Zero repo imposition.** All anvil state is operator-scoped and out-of-repo:
-   beads in `$BEADS_DIR` (default `~/.anvil/beads`), spec bodies in
-   `~/.anvil/specs/<id>.md`, run artifacts in `~/.anvil/runs/`. anvil never
-   commits a `.beads` file into a target repo, never edits a target repo's
-   `CLAUDE.md`, and never makes a teammate-visible change. Worktrees must not
-   each need their own committed file.
+1. **Zero repo imposition.** Beads, specs, the Forged ledger, run artifacts,
+   and controller records live under `$BEADS_DIR` / `$ANVIL_HOME` (normally
+   `~/.anvil`). Never commit `.beads`, orchestration config, or agent settings
+   to a target repo and never edit its `CLAUDE.md`.
+2. **One execution authority.** After spec lock, Beads owns readiness; Forged
+   owns topology, dispatch, gates, attempts, review/remediation, and outcomes;
+   Herdr owns panes/process transport; Git/GitHub own code and PR truth.
+   Smithy is a thin typed client. Do not recreate these state machines in a
+   skill, Workflow, monitor, shell loop, or timer.
+3. **Human branch authority.** Slice runs stop at draft PRs. Epic runs may
+   mechanically merge clean slices only into their integration branch and end
+   at one draft PR to the default branch. A human adjudicates that merge.
 
 ## Layout
 
-```
-.claude-plugin/marketplace.json     marketplace manifest (lists anvil)
+```text
+.claude-plugin/marketplace.json
 plugins/anvil/
-  .claude-plugin/plugin.json        plugin manifest
-  skills/<name>/SKILL.md            setup · plan · critique · adjudicate · dispatch · run-epic
-  agents/<name>.md                  anvil-critic · anvil-reviewer (subagents)
-  workflows/*.js                    Claude Code Workflow scripts (see gotchas below)
-  bootstrap/install-beads.sh        operator-scoped $BEADS_DIR bootstrap
-  LEARNINGS.md                      portable Forge lessons encoded in this plugin
+  .claude-plugin/plugin.json
+  .codex-plugin/plugin.json
+  skills/<name>/SKILL.md
+  skills/plan/{checklist,epic,research,schema}.md
+  agents/critic.md
+  bootstrap/install-beads.sh
+  LEARNINGS.md
 ```
 
-## Naming contract (keep these EXACT — files reference each other by them)
+There are intentionally no execution `workflows/*.js`, epic monitors, or
+scheduled-watch skill. `forged run submit` and `forged epic submit` are the
+durable detachment primitives; `forged overview` and the MCP App are the
+reconnect surfaces.
 
-- Skills install namespaced: `/anvil:setup`, `/anvil:plan`, `/anvil:critique`,
-  `/anvil:adjudicate`, `/anvil:dispatch`, `/anvil:run-epic`.
-- Subagents: `anvil-critic` (`agents/critic.md`), `anvil-reviewer` (`agents/reviewer.md`).
-  When the plugin is installed, the registry names are NAMESPACED:
-  `anvil:anvil-critic`, `anvil:anvil-reviewer`. Agents register only after
-  `/reload-plugins` (or a session restart) — a mid-session install is invisible.
-- Workflow scripts invoke subagents by trying `anvil:anvil-critic` then
-  `anvil-critic` (same for reviewer), then degrade to the default subagent with
-  an inline rubric. Keep that order when touching the helpers.
-- Structured fenced-block tags (the extraction contract): critic →
-  ` ```anvil-spec-critique `, synthesizer → ` ```anvil-spec-recommendations `,
-  reviewer → ` ```anvil-review `. Severity labels everywhere: BLOCKER/HIGH/MEDIUM/LOW.
+## Public skill names
 
-## Authoring Workflow scripts — gotchas that already bit us
+- `/anvil:setup`
+- `/anvil:plan`
+- `/anvil:critique`
+- `/anvil:adjudicate`
+- `/anvil:dispatch`
+- `/anvil:run-epic`
 
-The `.js` files in `workflows/` run under the Claude Code **Workflow tool**, NOT
-Node and NOT a default-export module. `node --check` passing does **not** mean it
-runs. The runtime executes the script **body** at top level with hooks as
-globals. Get these right:
+The optional Claude subagent is namespaced `anvil:anvil-critic`; critique must
+also work through the current harness's native delegation when that registry
+is unavailable.
 
-- Start with `export const meta = { name, description, phases }` (pure literal).
-  `phases` is an array of `{ title, detail }` objects — NOT strings, NOT
-  `{ name, description }`.
-- **No `export default function run(...)` wrapper.** The body runs directly. Use
-  the globals `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`, `args`.
-  Top-level `await` and top-level `return` are allowed.
-- `phase(title)` is **void** — it starts a progress group. It is NOT a
-  stage-wrapper; `pipeline(items, stage1, stage2, ...)` takes the stage callbacks
-  directly, each `(prevResult, originalItem, index) => ...`. Inside pipeline
-  stages, set grouping via the per-agent `phase:` opt, not the global `phase()`.
-- `parallel()` DOES nest inside a pipeline stage callback — it is the canonical
-  fan-out-within-a-stage shape (see `runBothReviews` in execute-review-fix.js).
-  An earlier commit's caution that nesting was unsupported proved wrong; don't
-  reintroduce sequential legs on that basis.
-- `agent(prompt, { schema })` returns a validated object; without a schema it
-  returns text. `agent(prompt, { agentType: 'anvil-reviewer' })` uses a plugin
-  subagent.
-- The runtime **forbids** `Date.now()`, `new Date()`, and `Math.random()` (they
-  break resume). Vary by index, not by randomness. (Note: even these tokens
-  appearing in a *string literal* trip the static check — paraphrase in prompts.)
+## Planning and execution boundary
 
-## Skills can't use `${CLAUDE_PLUGIN_ROOT}`
+- Planning and critique are human-in-the-loop. Critique scales from one pass
+  to a cross-family panel based on risk; never pay for a fixed large panel by
+  default.
+- Dispatch never hard-codes provider or model names. Profiles and ordered
+  rosters live in `$ANVIL_HOME/config.yaml`, validate with
+  `forged definition validate`, and are frozen into each run.
+- A future roster edit affects future runs. A live run changes roster only via
+  `forged run revise-roster` at a durable boundary.
+- Herdr is visibility/transport, not run truth. A process fallback must remain
+  visible in the ledger and status output.
 
-`${CLAUDE_PLUGIN_ROOT}` is expanded in JSON configs (`hooks.json`, `.mcp.json`,
-`monitors.json`) but **NOT** in SKILL.md text, and **NOT** as a Bash env var during
-skill execution (Claude Code issue #9354). A skill therefore cannot reference a
-bundled file by that variable — the model just sees the literal string. anvil's
-pattern: `/anvil:setup` discovers the plugin root and persists
-`export ANVIL_PLUGIN_ROOT=...`; the workflow-invoking skills resolve bundled scripts
-as `$ANVIL_PLUGIN_ROOT/workflows/<file>.js` with a `find "$HOME/.claude/plugins" …`
-fallback. When you add a skill that needs a bundled file, follow that pattern — do
-**not** write `${CLAUDE_PLUGIN_ROOT}` in SKILL.md.
+## Validate before completion
 
-## Validate before you call it done
-
-```bash
-claude plugin validate .                 # marketplace + plugin manifests
-node --check plugins/anvil/workflows/*.js # JS syntax (necessary, not sufficient)
-bash scripts/validate.sh                 # everything CI runs, locally
+```sh
+claude plugin validate .
+bash scripts/validate.sh
 ```
 
-CI (`.github/workflows/validate.yml`) runs `scripts/validate.sh` on every PR
-and push to main: JSON manifests, workflow-JS syntax **and** the
-forbidden-runtime-token rule (`Date.now(`/`new Date(`/`Math.random(` outside
-comments), skill/agent frontmatter, and `sh -n` over watch-epic's extracted
-tick template. `claude plugin validate .` cannot run on CI runners (no Claude
-Code CLI) — keep running it locally.
+CI runs `scripts/validate.sh`: JSON manifests, frontmatter, bootstrap syntax,
+and a regression check that the removed Workflow/watch execution files do not
+return. `claude plugin validate .` is local-only because CI has no Claude CLI.
 
-Frontmatter conventions: skills need `name` + `description`; subagents need
-`name` + `description`, plus `tools:` to restrict (reviewers/critics are
-**read-only** — no Write/Edit) and optional `model:`.
+**Bump both plugin manifests on every behavior change.** Installed plugins are
+version-keyed and otherwise continue serving stale content.
 
-**Bump the plugin version on any behavior change** (`plugins/anvil/.claude-plugin/plugin.json`).
-The installed copy lives in a version-keyed cache
-(`~/.claude/plugins/cache/smithy/anvil/<version>/`); ship a change without a bump and
-installs keep silently serving the old files.
+## Historical evidence
 
-## Model roster (deliberate pins — don't "fix" them casually)
-
-Encoded in the workflow scripts, rationale in LEARNINGS §14 (priced from the first
-dogfooded epic). The rule the pins express: **the strongest available model sits
-on the judgment seats; checklist seats run cheap; family diversity is bought
-deliberately, never accidentally.**
-
-Current: **implementer defaults to opus** (`implementModel:"codex"` hands the
-build to the other family at gpt-5.6-sol/xhigh — the strongest model this
-pipeline can reach, and a different quota pool; `"sonnet"` opts a trivial slice
-down). Reviewer/re-review, the merge seat, replan/promotion, critic A, critic B
-and the synthesizer are opus; codex legs (critic C, second reviewer, optional
-implementer) run `${ANVIL_CODEX_MODEL:-gpt-5.6-sol}` at
-`${ANVIL_CODEX_EFFORT:-xhigh}`; relays and the checklist seats (setup, frontier,
-resolve, quality gate, PR steps) are sonnet. Seats with **no** `model:` — the fix
-seat — inherit the session's model, so they follow whatever the operator is
-running.
-
-**These were fable seats until 2026-08-12**, when that tier's quota ran out
-mid-program. Restore fable to the implementer, critic A, and the synthesizer
-first when it returns — those are where the tier difference paid. Two
-consequences of the swap are worth knowing: critics A and B are now the same
-model and differ by ANGLE only (the panel's family balance is unchanged — two
-Claude legs, one codex), and the synthesizer stays a Claude seat because it must
-emit a validated schema, which a codex relay cannot do without an extraction
-step.
-
-## Don't commit operator state
-
-`.gitignore` excludes `~/.anvil`-style state, `.beads/`, and logs. The repo holds
-the *plugin source* only — never a beads DB, spec, or run artifact.
+`plugins/anvil/LEARNINGS.md` preserves the bare-parts experiment and its cost/
+failure evidence. Treat the old Workflow-specific sections as history. The
+current architecture is the decision recorded at the top of that file and in
+Forge ADR-0033: Anvil owns lead-agent planning; Forged owns execution.

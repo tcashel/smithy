@@ -21,15 +21,8 @@ set -uo pipefail
 ANVIL_HOME="${ANVIL_HOME:-$HOME/.anvil}"
 export BEADS_DIR="${BEADS_DIR:-$ANVIL_HOME/beads}"
 
-# The plugin root is this script's grandparent. The skills need it because
-# ${CLAUDE_PLUGIN_ROOT} is not expanded in SKILL.md text, and they need
-# BEADS_DIR for every bd/br call — so we print BOTH exports below as one block
-# rather than leaving either to be re-derived from a default.
-ANVIL_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
 echo "anvil: operator-scoped home   = $ANVIL_HOME"
 echo "anvil: BEADS_DIR (out-of-repo) = $BEADS_DIR"
-echo "anvil: plugin root             = $ANVIL_PLUGIN_ROOT"
 
 mkdir -p "$BEADS_DIR" "$ANVIL_HOME/specs"
 
@@ -59,11 +52,11 @@ echo "anvil: using beads binary      = $BD_BIN"
 cat <<EOF
 
 anvil: beads store ready (operator-scoped, repo-untouched).
-  Add BOTH of these to your shell profile so every anvil skill/workflow sees
-  the same store and can find its bundled workflows:
+  Add BOTH of these to your shell profile so Anvil and Forged see the same
+  operator-scoped state:
 
+    export ANVIL_HOME="$ANVIL_HOME"
     export BEADS_DIR="$BEADS_DIR"
-    export ANVIL_PLUGIN_ROOT="$ANVIL_PLUGIN_ROOT"
 
   Sanity check (should list nothing yet, and create NOTHING in your repo):
     BEADS_DIR="$BEADS_DIR" $BD_BIN ready

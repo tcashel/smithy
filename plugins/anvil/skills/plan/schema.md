@@ -26,7 +26,7 @@ The H1 becomes the PR title **verbatim**, so it must be conventional-commit
 format: `<type>(<scope>): <imperative summary>` — all lowercase, ≤ 70 chars.
 
 - Good: `feat(dispatch): label anvil draft prs with quality-gate status`
-- Good: `ci: validate plugin manifests and workflow scripts on push`
+- Good: `ci: validate plugin manifests and skill frontmatter on push`
 - Bad: `Improve the CI` (no type, not imperative, capitalized)
 - Bad: `feat: add the thing we discussed` (means nothing without the conversation)
 
@@ -39,10 +39,9 @@ surrounding system. The agent has NEVER seen this repo before. Name the stack,
 the relevant directories/files (only ones you verified exist), and any
 constraint that shapes the solution.
 
-- Good: "This repo is a Claude Code plugin marketplace. CI does not exist yet.
-  The two checks that matter are `claude plugin validate .` and
-  `node --check plugins/anvil/workflows/*.js` (see CLAUDE.md 'Validate before
-  you call it done')."
+- Good: "This repo is an agent plugin marketplace. CI does not exist yet. The
+  two checks that matter are `claude plugin validate .` and
+  `bash scripts/validate.sh` (see CLAUDE.md 'Validate before completion')."
 - Bad: "We want better CI." (no system context, agent must guess everything)
 
 ### What We're Building
@@ -63,7 +62,7 @@ checkable by reading the diff or running a command — never a vibe.
 
 - Good: "- `.github/workflows/validate.yml` exists and triggers on `push` to
   `main` and on `pull_request`."
-- Good: "- The job fails when `node --check` fails (verified by the workflow
+- Good: "- The job fails when `scripts/validate.sh` fails (verified by the job
   using the command's exit code, not `|| true`)."
 - Bad: "- CI works correctly." / "- Tests pass." (correct according to what?)
 
@@ -86,7 +85,7 @@ how to know it's done. Standard lines worth including:
 
 - Commit only intentionally-changed files (`git add <path>`, never `git add -A`).
 - Conventional commits.
-- Do not push or open a PR — anvil does that.
+- Do not push or open a PR — Forged owns that stage.
 
 ## Open Questions block
 

@@ -1,8 +1,0 @@
-[
-  {
-    "name": "epic-events",
-    "description": "anvil epic boundary events (wave starts, slice merges/stalls, stub promotions, stops, the epic PR) tailed from ~/.anvil/runs/epic-events.log",
-    "when": "on-skill-invoke:run-epic",
-    "command": "mkdir -p \"$HOME/.anvil/runs\" && touch \"$HOME/.anvil/runs/epic-events.log\" && tail -n 0 -F \"$HOME/.anvil/runs/epic-events.log\""
-  }
-]

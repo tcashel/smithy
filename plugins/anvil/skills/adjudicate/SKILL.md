@@ -1,13 +1,18 @@
 ---
 name: adjudicate
-description: "Walks the operator through every unresolved CRUX in an anvil-spec-recommendations document one at a time — conflicting critic findings and open questions — captures the resolution, writes it back into the spec body at ~/.anvil/specs/<id>.md, and gates: the spec cannot leave adjudication with any crux unresolved. When clean, flips the bd issue to ready."
+description: "Walks the operator through every unresolved CRUX in an anvil-spec-recommendations document one at a time — conflicting critic findings and open questions — captures the resolution, writes it back into the operator-scoped spec body, and gates: the spec cannot leave adjudication with any crux unresolved. When clean, flips the bd issue to ready."
 ---
 
 # anvil:adjudicate
 
 This is the **write-back surface** of the anvil pipeline. Beads viewers (`bv`) are read-only; this skill is the one place where a human decision actually changes the spec on disk and moves the issue forward.
 
-You are given a spec id `<id>`. Its body lives at `~/.anvil/specs/<id>.md` and it has a matching bd issue. The `/anvil:critique` run produced an `anvil-spec-recommendations` block (the synthesizer output). Your job: resolve every **CRUX** in that block with the operator, write each resolution into the spec body, and only then flip the issue to `ready`.
+You are given a spec id `<id>`. Its body lives at
+`${ANVIL_HOME:-$HOME/.anvil}/specs/<id>.md` and it has a matching bd issue. The
+`/anvil:critique` run produced an `anvil-spec-recommendations` block (the
+synthesizer output). Your job: resolve every **CRUX** in that block with the
+operator, write each resolution into the spec body, and only then flip the
+issue to `ready`.
 
 A **CRUX** is anything that blocks the spec from being self-contained:
 
@@ -24,9 +29,18 @@ The portable Forge lesson: **the spec is the sole input.** The implementing agen
 
 Resolve, in order:
 
-1. The spec body: `cat ~/.anvil/specs/<id>.md`.
-2. The recommendations block. It was saved alongside the spec — look for `~/.anvil/specs/<id>.recommendations.md` (or the `anvil-spec-recommendations` fenced block wherever `/anvil:critique` wrote it). Read its **Open Questions**, **Findings Triage** (rows classified `conflicting`), and **Recommended Edits** sections.
-3. The bd issue: `bd show <id>` (honor `$BEADS_DIR`, default `~/.anvil/beads`).
+```bash
+export ANVIL_HOME="${ANVIL_HOME:-$HOME/.anvil}"
+export BEADS_DIR="${BEADS_DIR:-$ANVIL_HOME/beads}"
+```
+
+1. The spec body: `cat "$ANVIL_HOME/specs/<id>.md"`.
+2. The recommendations block. It was saved alongside the spec — look for
+   `$ANVIL_HOME/specs/<id>.recommendations.md` (or the
+   `anvil-spec-recommendations` fenced block wherever `/anvil:critique` wrote
+   it). Read its **Open Questions**, **Findings Triage** (rows classified
+   `conflicting`), and **Recommended Edits** sections.
+3. The bd issue: `bd show <id>` using the resolved `$BEADS_DIR`.
 
 If the recommendations block is missing, STOP and tell the operator to run `/anvil:critique` first.
 
@@ -49,7 +63,12 @@ CRUX <n> of <total>  [CONFLICT | OPEN QUESTION]   severity: BLOCKER|HIGH|MEDIUM|
   Choose:  A   B   E)dit (type your own resolution)   S)kip
 ```
 
-For a **conflict**, A and B are the opposing positions, quoted faithfully (preserve the higher severity per the synthesizer rule). Keep the loop two-way even when a third critic weighed in: if the conflict carries a `criticCPosition` (the codex leg took a side), fold it into whichever option it backs and say so on that line — *"B) … (codex agrees)"*. A cross-family second is worth knowing about; a third keystroke is not. For an **open question**, frame A/B as the two most plausible answers the synthesizer or critics implied; if it's genuinely open-ended, present A/B as the leading candidates and lean on `E` for anything else.
+For a **conflict**, A and B are the opposing positions, quoted faithfully
+(preserve the higher severity). Keep the loop two-way even when a third critic
+weighed in: fold it into whichever option it backs and name the source. A
+cross-family second is worth knowing about; a third keystroke is not. For an
+**open question**, frame A/B as the two most plausible answers and use `E` for
+anything else.
 
 Then take the operator's choice:
 
@@ -61,7 +80,9 @@ Echo the chosen resolution back in one line and move to the next crux. Keep mome
 
 ## Writing the resolution back
 
-This is the load-bearing step. After each decision, edit `~/.anvil/specs/<id>.md` so the resolution lives **in the spec body itself**, where the implementing agent will read it:
+This is the load-bearing step. After each decision, edit
+`$ANVIL_HOME/specs/<id>.md` so the resolution lives **in the spec body itself**,
+where the implementing agent will read it:
 
 - If the crux touches existing spec text, replace that text in place with the resolved version.
 - If it adds a constraint, acceptance criterion, or decision, put it in the right section (Acceptance Criteria, Constraints, Non-Goals, etc.) — not in a footnote.
@@ -79,7 +100,10 @@ RECOMMENDED EDITS — <count> proposed, none are conflicts.
   Apply all?  Y)es   N)o, let me veto some   R)eview each
 ```
 
-For any edit the operator accepts, apply the synthesizer's replacement text to `~/.anvil/specs/<id>.md`. Vetoed edits are dropped (note them in the adjudication log). These do not gate — they're optional polish — but applying them is the point of having critiqued at all.
+For any edit the operator accepts, apply the synthesizer's replacement text to
+`$ANVIL_HOME/specs/<id>.md`. Vetoed edits are dropped (note them in the
+adjudication log). These do not gate — they're optional polish — but applying
+them is the point of having critiqued at all.
 
 ## The gate
 
@@ -89,7 +113,7 @@ Before flipping the issue, verify the spec is clean:
 2. **No crux meta leaked into the body.** Grep the spec for telltale leftovers and refuse to pass if any remain in the body proper (the adjudication log is exempt):
 
    ```bash
-   grep -nEi 'open question|conflicting|critic a|critic b|\bTBD\b|\bTODO\b|\?\?\?' ~/.anvil/specs/<id>.md
+   grep -nEi 'open question|conflicting|critic a|critic b|\bTBD\b|\bTODO\b|\?\?\?' "$ANVIL_HOME/specs/<id>.md"
    ```
 
 3. **Spec is self-contained.** Re-read the body once as if you were the implementing agent with no other context. If a decision still reads as ambiguous, surface it as a fresh crux and resolve it.
@@ -101,7 +125,7 @@ If the gate fails, print which cruxes remain and stop WITHOUT touching the bd is
 Only when the gate passes:
 
 ```bash
-# honor $BEADS_DIR (default ~/.anvil/beads)
+# $BEADS_DIR was resolved from $ANVIL_HOME above
 bd update <id> --status open
 ```
 
@@ -113,18 +137,9 @@ lists the id. On a bd/br build that does expose an explicit ready verb, use that
 the contract is only: the issue leaves adjudication so `/anvil:dispatch`'s work-list
 (`bd ready`) picks it up. Confirm with `bd show <id>` and `bd ready`.
 
-Then retire the critique panel's scratch artifacts — the codex leg's prompt/log/pid
-under `~/.anvil/runs/critique/<id>/` have no reader once the spec is adjudicated,
-and nothing else sweeps that directory:
-
-```bash
-# macOS: prefer `trash` — recoverable, and home-path guard hooks allow it
-trash "$HOME/.anvil/runs/critique/<id>" 2>/dev/null \
-  || rm -rf "$HOME/.anvil/runs/critique/<id>"
-```
-
-(Keep `~/.anvil/specs/<id>.recommendations.md` — it is the audit trail of what the
-panel found; only the run scratch goes.)
+Keep `$ANVIL_HOME/specs/<id>.recommendations.md`; it is the audit trail of what
+the proportional critique found. Native host delegation owns any ephemeral
+critic session state.
 
 ## Output
 
@@ -134,7 +149,7 @@ End with a tight summary the operator can scan:
 Spec <id> adjudicated.
   Cruxes resolved:     <n>  (A:<a> B:<b> edited:<e>)
   Recommended edits:   <applied>/<proposed> applied
-  Spec body:           ~/.anvil/specs/<id>.md
+  Spec body:           $ANVIL_HOME/specs/<id>.md
   Status:              ready  ✓  (picked up by `bd ready`)
 ```
 
@@ -146,8 +161,11 @@ If you stopped at the gate instead, end with what's still open and the explicit 
 - **Never flip to ready with an open crux.** The gate is the whole point. A skipped or ambiguous crux means the issue stays put.
 - **Strip the meta from the body.** The implementing agent must never see critic-vs-critic framing or open-question language. Keep that in the adjudication log only.
 - **One crux at a time.** Crisp, keyboard-friendly, minimal ceremony. Don't re-print the whole recommendations document between decisions.
-- **Operator-scoped, zero repo imposition.** All reads and writes stay under `~/.anvil/` and `$BEADS_DIR`. Never touch the target repo, its CLAUDE.md, or its settings. Never write a `.beads` file into the repo.
-- **Never shell out to `forge`.** Use only `bd`/`br`, `git`, `gh`, and file edits.
+- **Operator-scoped, zero repo imposition.** All reads and writes stay under
+  `$ANVIL_HOME` and `$BEADS_DIR`. Never touch the target repo, its CLAUDE.md, or
+  its settings. Never write a `.beads` file into the repo.
+- **Do not start execution here.** `/anvil:dispatch` or `/anvil:run-epic`
+  performs the explicit Forged handoff after adjudication completes.
 
 ## Voice
 
