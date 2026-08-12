@@ -84,12 +84,14 @@ Never report a process fallback as a Herdr session.
 Offer—do not silently perform—to add the chosen values to the shell profile:
 
 ```sh
-export ANVIL_HOME="$HOME/.anvil"
-export BEADS_DIR="$ANVIL_HOME/beads"
+export ANVIL_HOME="<resolved absolute ANVIL_HOME>"
+export BEADS_DIR="<resolved absolute BEADS_DIR>"
 ```
 
-Check for existing exports before appending. The plugin root no longer needs
-to be persisted: execution Workflow files were removed.
+Replace both placeholders with the values resolved during setup; never reset a
+custom home to `$HOME/.anvil`. Check for existing exports before appending. The
+plugin root no longer needs to be persisted: execution Workflow files were
+removed.
 
 ## 6. Prove zero repo imposition
 

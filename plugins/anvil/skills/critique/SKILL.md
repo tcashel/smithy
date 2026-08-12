@@ -37,9 +37,9 @@ say so; never fabricate a corroborating opinion.
 
 When the harness supports native subagents, give each critic only the spec,
 target repo, its angle, and read-only authority. Claude Code may use the bundled
-`anvil-critic` agent; Codex or another harness should use its equivalent native
-delegation. If native delegation is unavailable, perform the lean pass in the
-lead session and disclose that independence was unavailable.
+`anvil:anvil-critic` agent; Codex or another harness should use its equivalent
+native delegation. If native delegation is unavailable, perform the lean pass
+in the lead session and disclose that independence was unavailable.
 
 Every critic checks:
 
