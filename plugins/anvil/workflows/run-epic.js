@@ -223,13 +223,16 @@ const EPIC_PR_SCHEMA = {
     const atoms = (atomRun?.atoms || []).filter(Boolean);
 
     // ── Merge policy: clean in, everything else stalls ────────────────────────
-    // Clean = the atom reached its terminal happy state (which implies the
-    // review RAN — a review-failed atom finalizes differently), the quality
-    // gate passed, and the merged severer-verdict review carries no BLOCKER or
-    // HIGH finding from either reviewer.
+    // Clean is FAIL-CLOSED on every leg (beads-4zp retro): terminal happy
+    // state, quality gate EXPLICITLY passed (undefined stalls — a lost
+    // quality result is not a pass), the merged severer-verdict review says
+    // approve outright, and no BLOCKER/HIGH finding from either reviewer.
+    // Anything else waits for the operator; auto-merge never gives the
+    // benefit of the doubt.
     const isClean = (a) => {
       if (a.status !== "draft-pr-ready-for-adjudication" || !a.prNumber) return false;
-      if (a.qualityPassed === false) return false;
+      if (a.qualityPassed !== true) return false;
+      if ((a.review?.verdict || "").toLowerCase() !== "approve") return false;
       const sev = (a.review?.findings || []).map((f) => f.severity);
       return !sev.includes("BLOCKER") && !sev.includes("HIGH");
     };
