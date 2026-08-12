@@ -1,0 +1,20 @@
+{
+  "name": "smithy",
+  "interface": {
+    "displayName": "smithy"
+  },
+  "plugins": [
+    {
+      "name": "anvil",
+      "source": {
+        "source": "local",
+        "path": "./plugins/anvil"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_FIRST_USE"
+      },
+      "category": "Development"
+    }
+  ]
+}
