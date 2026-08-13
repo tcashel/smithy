@@ -72,29 +72,39 @@ that buckets every finding into:
 
 That corroborated/single/conflicting split is the entire payoff, and two same-family
 critics are the floor that produces it. What moved the ceiling was not a third *opinion*
-but a third **model family**: `plan-critique-improve.js` now runs a third leg that hands
+but a third **model family**: `plan-critique-improve.js` ran a third leg that handed
 the same critique prompt to the `codex` CLI
-(`codex exec --sandbox read-only`) and relays its findings back in the same contract.
+(`codex exec --sandbox read-only`) and relayed its findings back in the same contract.
 Two instances of one model share blind spots — and share hallucinations — so their
 agreement is weaker evidence than it looks. Agreement across families cannot arrive by
 that route, which makes it the strongest signal the panel produces.
 
 This is not a hunch. The codex leg caught merge-blocking defects in four consecutive
-drover rounds, findings the same-family critics did not raise. That is why it is wired
-into the workflow as structure rather than left as tribal knowledge the operator has to
-remember to run by hand. It stays strictly optional: when `codex` is absent or the
-invocation fails, the leg reports itself unavailable — it never fabricates a third
-opinion — and the panel degrades to exactly the two-critic behavior above. Going past
-three is still diminishing returns.
+drover rounds, findings the same-family critics did not raise. That is why it was wired
+in as structure rather than left as tribal knowledge the operator had to remember to run
+by hand. It stayed strictly optional: when `codex` was absent or the invocation failed,
+the leg reported itself unavailable — it never fabricated a third opinion — and the
+panel degraded to exactly the two-critic behavior above. Going past three is still
+diminishing returns.
 
-**The same argument applies after the code is written.** The execution atom reviews
+**The same argument applied after the code was written.** The execution atom reviewed
 every draft PR twice: `anvil-reviewer` and a codex relay, findings tagged by source and
 merged, with the severer of the two verdicts winning — a reviewer that found a blocker
 is not outvoted by one that did not look in the same place. Reviewing is where
-corroboration is cheapest to act on, because the fix round is already there. The
-post-fix re-review deliberately skips codex: that verdict is informational (the atom
-stops either way), and a second full pass is real money for a number nothing branches
+corroboration is cheapest to act on, because the fix round is already there. That atom's
+post-fix re-review deliberately skipped codex: that verdict was informational (the atom
+stopped either way), and a second full pass is real money for a number nothing branches
 on.
+
+**Where this went.** Every artifact named above is deleted, and
+`scripts/validate.sh` keeps them deleted: `plan-critique-improve.js` and
+`agents/reviewer.md` are both on its legacy-paths list. Anvil no longer owns a review
+stage at all. What survived is the finding, not the wiring — `/anvil:critique` still
+buckets corroborated/single/conflicting and still prefers a second model family over a
+second instance, but it scales topology to risk and uses the host harness's native
+delegation instead of a bundled workflow shelling a CLI. Post-lock review belongs to
+Forged, against the operator's roster. Read this section as why those contracts exist,
+not as a description of code in this repository.
 
 ## 4. The atom stops at a draft PR
 
@@ -218,10 +228,16 @@ The general form: an agent supervising anything longer than its own tool timeout
 a detached job, a durable status file, a poll loop, and a kill path. Any one of those
 missing and "don't watch" becomes "can't tell".
 
-Where it applies in anvil today: **not** the implementing agent, which stopped being a
-spawned process entirely (§11), but the `codex` legs in both the critique panel and the
-review stage. Those genuinely shell a long-running CLI, and they use exactly this
-pattern.
+**Where this went.** Nothing in this repository spawns, polls, or reaps a job any
+more. The implementing agent stopped being a spawned process first (§11), and the last
+two callers of this pattern — the `codex` legs in the critique panel and the review
+stage — went with the Workflow execution path. `/anvil:dispatch` now forbids the whole
+shape by name: no `&`, no `nohup`, no PID file, no lead-agent poll loop. `forged run
+submit` is the detachment primitive and the ledger is the durable status file, which is
+these three rules relocated into a service that outlives the session. Treat the section
+as the reason Forged's handoff has a durable record and a deadline — and as a live
+warning for any future code that *does* shell a long job — not as guidance for a skill
+here.
 
 ## 11. Prefer a sanctioned subagent to a spawned CLI
 
@@ -278,9 +294,9 @@ it will be wrong, and it will look authoritative.
 
 ## 13. Sandbox asymmetry: the read-only legs get the harder cage
 
-The codex legs — critics and reviewer, the roles that must never write — run under an
+The codex legs — critics and reviewer, the roles that must never write — ran under an
 OS-enforced sandbox (`codex exec --sandbox read-only`, Seatbelt on macOS). The
-implementing agent — the role that must write — has no such cage: its containment is
+implementing agent — the role that must write — had no such cage: its containment was
 structural (a disposable worktree outside the repo, commits that only ever reach a
 draft PR or an integration branch, never the default branch). Mechanical enforcement
 where a guarantee is cheap, structural containment where capability is the point.

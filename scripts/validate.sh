@@ -83,18 +83,34 @@ done
 
 # 6. The positive handoff contract. Absence checks alone would still pass on a
 #    skill that quietly stopped calling Forged, so assert the CLI verbs too.
-check_contains() {
-  grep -qF -- "$2" "$1"
+#    A bare substring search gets this wrong two ways, both of which are live in
+#    these files: prose names the verb ("disconnect as soon as `forged run
+#    submit` returns"), and a later controls cheatsheet repeats it at the start
+#    of a line. Either would keep passing after the real call was deleted. So
+#    require one FENCED BLOCK containing an executable `start` line followed by
+#    an executable `submit` line — the freeze-then-detach handoff itself, in
+#    order. Prose fails it, and a cheatsheet block with no `start` fails it.
+check_handoff_block() {
+  awk -v start="$2" -v submit="$3" '
+    function invokes(line, verb,   tail) {
+      if (index(line, verb) != 1) { return 0 }
+      tail = substr(line, length(verb) + 1, 1)
+      return (tail == "" || tail == " ")
+    }
+    /^```/                       { fenced = !fenced; froze = 0; next }
+    !fenced                      { next }
+    invokes($0, start)           { froze = 1; next }
+    froze && invokes($0, submit) { ok = 1 }
+    END                          { exit !ok }
+  ' "$1"
 }
 
 dispatch_skill=plugins/anvil/skills/dispatch/SKILL.md
 epic_skill=plugins/anvil/skills/run-epic/SKILL.md
-for verb in "forged run start" "forged run submit"; do
-  check "dispatch invokes: $verb" check_contains "$dispatch_skill" "$verb"
-done
-for verb in "forged epic start" "forged epic submit"; do
-  check "run-epic invokes: $verb" check_contains "$epic_skill" "$verb"
-done
+check "dispatch hands off: forged run start then submit" \
+  check_handoff_block "$dispatch_skill" "forged run start" "forged run submit"
+check "run-epic hands off: forged epic start then submit" \
+  check_handoff_block "$epic_skill" "forged epic start" "forged epic submit"
 
 # 7. Both plugin manifests ship the same advertised version. Installed plugins
 #    are version-keyed, so a half-bumped pair serves stale content forever.
