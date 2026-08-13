@@ -30,6 +30,7 @@ and may disconnect. Forged owns long-horizon execution.
 
 ```text
 .claude-plugin/marketplace.json
+.agents/plugins/marketplace.json
 plugins/anvil/
   .claude-plugin/plugin.json
   .codex-plugin/plugin.json
@@ -66,6 +67,10 @@ is unavailable.
 - Dispatch never hard-codes provider or model names. Profiles and ordered
   rosters live in `$ANVIL_HOME/config.yaml`, validate with
   `forged definition validate`, and are frozen into each run.
+- Assurance profile and roster are independent choices. `lean`/`standard`/
+  `high` set topology; `mixed`, `all-codex`, and `all-anthropic` are the
+  practical operator rosters. Documentation may name them; no skill, manifest,
+  or script in this repo may carry their YAML.
 - A future roster edit affects future runs. A live run changes roster only via
   `forged run revise-roster` at a durable boundary.
 - Herdr is visibility/transport, not run truth. A process fallback must remain
@@ -78,12 +83,18 @@ claude plugin validate .
 bash scripts/validate.sh
 ```
 
-CI runs `scripts/validate.sh`: JSON manifests, frontmatter, bootstrap syntax,
-and a regression check that the removed Workflow/watch execution files do not
-return. `claude plugin validate .` is local-only because CI has no Claude CLI.
+CI runs `scripts/validate.sh`: JSON manifests (both marketplaces, both plugin
+manifests), frontmatter, bootstrap syntax, a regression check that the removed
+Workflow/watch execution files do not return, and the positive handoff contract
+— dispatch must still invoke `forged run start`/`submit`, run-epic must still
+invoke `forged epic start`/`submit`, and both plugin manifests must advertise
+the same version. `claude plugin validate .` is local-only because CI has no
+Claude CLI.
 
 **Bump both plugin manifests on every behavior change.** Installed plugins are
-version-keyed and otherwise continue serving stale content.
+version-keyed and otherwise continue serving stale content. The bump is three
+edits, not two: both `plugin.json` files and `expected_version` in
+`scripts/validate.sh`, which is what keeps the pair from drifting apart.
 
 ## Historical evidence
 

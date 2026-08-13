@@ -15,11 +15,14 @@ conversation → plan → critique as needed → adjudicate → forged submit
                                   implement → gate → review → fix → draft PR
 ```
 
-Execution is provider-neutral. Assurance profiles (`lean`, `standard`,
-`high`) control topology; YAML rosters control ordered provider/model
-candidates. Switching from Fable to Opus, or from Anthropic to Codex, is a
-roster change rather than a workflow rewrite. Herdr provides observable panes
-and interventions while Forged's ledger remains durable truth.
+Execution is provider-neutral, and two independent dials control it. Assurance
+profiles (`lean`, `standard`, `high`) choose topology — how much independent
+review the work has to earn. Named rosters choose the ordered provider/model
+candidates behind each seat; `mixed`, `all-codex`, and `all-anthropic` are the
+practical ones. Changing families is a roster edit, not a workflow rewrite, and
+the roster YAML is operator configuration in `$ANVIL_HOME/config.yaml` — it is
+never committed here or into a target repo. Herdr provides observable panes and
+interventions while Forged's ledger remains durable truth.
 
 All state is operator-scoped under `$BEADS_DIR` and `$ANVIL_HOME` (normally
 `~/.anvil`). Anvil never commits `.beads` or agent configuration to a target
@@ -57,4 +60,6 @@ See [the plugin guide](plugins/anvil/README.md) and
 
 ## License
 
-[Apache 2.0](LICENSE) © 2026 Tripp Cashel — see [NOTICE](NOTICE).
+[MIT License with the OpenAI/Anthropic rider](LICENSE) © 2026 Tripp Cashel —
+see [NOTICE](NOTICE). The rider is a condition of the license, so read
+`LICENSE` before redistributing.

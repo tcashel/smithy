@@ -33,7 +33,8 @@ check_frontmatter() {
 }
 
 # 1. JSON manifests
-check "marketplace.json" check_json .claude-plugin/marketplace.json
+check "Claude marketplace.json" check_json .claude-plugin/marketplace.json
+check "Codex marketplace.json" check_json .agents/plugins/marketplace.json
 check "Claude plugin.json" check_json plugins/anvil/.claude-plugin/plugin.json
 check "Codex plugin.json" check_json plugins/anvil/.codex-plugin/plugin.json
 
@@ -79,6 +80,70 @@ for f in "${legacy_paths[@]}"; do
     echo "PASS: legacy path absent: $f"
   fi
 done
+
+# 6. The positive handoff contract. Absence checks alone would still pass on a
+#    skill that quietly stopped calling Forged, so assert the CLI verbs too.
+#    A bare substring search gets this wrong two ways, both of which are live in
+#    these files: prose names the verb ("disconnect as soon as `forged run
+#    submit` returns"), and a later controls cheatsheet repeats it at the start
+#    of a line. Either would keep passing after the real call was deleted. So
+#    require one FENCED BLOCK containing an executable `start` line followed by
+#    an executable `submit` line — the freeze-then-detach handoff itself, in
+#    order. Prose fails it, and a cheatsheet block with no `start` fails it.
+check_handoff_block() {
+  awk -v start="$2" -v submit="$3" '
+    function invokes(line, verb,   tail) {
+      sub(/^[[:space:]]+/, "", line)
+      if (index(line, verb) != 1) { return 0 }
+      tail = substr(line, length(verb) + 1, 1)
+      return (tail == "" || tail == " ")
+    }
+    /^[[:space:]]*```/           { fenced = !fenced; froze = 0; next }
+    !fenced                      { next }
+    invokes($0, start)           { froze = 1; next }
+    froze && invokes($0, submit) { ok = 1 }
+    END                          { exit !ok }
+  ' "$1"
+}
+
+dispatch_skill=plugins/anvil/skills/dispatch/SKILL.md
+epic_skill=plugins/anvil/skills/run-epic/SKILL.md
+check "dispatch hands off in one fenced block: forged run start then submit" \
+  check_handoff_block "$dispatch_skill" "forged run start" "forged run submit"
+check "run-epic hands off in one fenced block: forged epic start then submit" \
+  check_handoff_block "$epic_skill" "forged epic start" "forged epic submit"
+
+# 7. Planning must honor a non-default ANVIL_HOME for both the spec write and
+#    the Beads pointer. A literal default-home spec path can split those targets.
+check_custom_anvil_home_contract() {
+  local plan=plugins/anvil/skills/plan/SKILL.md
+  local epic=plugins/anvil/skills/plan/epic.md
+
+  ! grep -Fq '~/.anvil/specs/' "$plan" &&
+    ! grep -Fq '~/.anvil/specs/' "$epic" &&
+    grep -Fq -- '-> $ANVIL_HOME/specs/$ID.md' "$plan" &&
+    grep -Fq -- 'spec: $ANVIL_HOME/specs/$ID.md' "$plan" &&
+    grep -Fq '${ANVIL_HOME:-$HOME/.anvil}/specs/<epic-id>.md' "$epic" &&
+    grep -Fq '${ANVIL_HOME:-$HOME/.anvil}/specs/<child-id>.md' "$epic"
+}
+
+check "plan honors a non-default ANVIL_HOME" check_custom_anvil_home_contract
+
+# 8. Both plugin manifests ship the same advertised version. Installed plugins
+#    are version-keyed, so a half-bumped pair serves stale content forever.
+#    Bumping Anvil means editing this constant alongside both plugin.json files.
+expected_version=0.3.0
+
+check_version() {
+  local actual
+  actual=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version))" "$1") || return 1
+  [[ $actual == "$2" ]]
+}
+
+check "Claude plugin.json version == $expected_version" \
+  check_version plugins/anvil/.claude-plugin/plugin.json "$expected_version"
+check "Codex plugin.json version == $expected_version" \
+  check_version plugins/anvil/.codex-plugin/plugin.json "$expected_version"
 
 if [[ $failures -gt 0 ]]; then
   exit 1

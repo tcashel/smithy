@@ -38,7 +38,7 @@ structure, never picked for ceremony.
 
 ## The plan map (the epic's spec body)
 
-Lives at `~/.anvil/specs/<epic-id>.md`, exactly like any spec. Sections:
+Lives at `${ANVIL_HOME:-$HOME/.anvil}/specs/<epic-id>.md`, exactly like any spec. Sections:
 
 ```markdown
 # <epic title — conventional-commit format; becomes the epic→main PR title>
@@ -72,7 +72,7 @@ label such as `anvil-epic` if the installed bd supports labels).
 ## Children and dependency edges
 
 Every slice is an ordinary bd issue whose spec lives at
-`~/.anvil/specs/<child-id>.md`. Wire the graph so `bd ready` does the
+`${ANVIL_HOME:-$HOME/.anvil}/specs/<child-id>.md`. Wire the graph so `bd ready` does the
 sequencing (the exact dep verb varies by bd version — the contract is what
 matters):
 

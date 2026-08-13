@@ -28,7 +28,8 @@ lived in your head while planning is gone the moment the loop dispatches.
 Consequence: a vague spec produces a confused agent, and you only discover it at the
 draft PR. Planning's job is to make the spec self-contained — goal, constraints,
 acceptance criteria, file-level pointers, and the test that proves it done — so the
-agent never has to guess. In anvil the spec body is the file `~/.anvil/specs/<id>.md`;
+agent never has to guess. In anvil the spec body is the file
+`$ANVIL_HOME/specs/<id>.md` (default `~/.anvil/specs/<id>.md`);
 treat it as the entire universe the implementer gets to read.
 
 ## 2. Trust the sidecar result event, not the pipeline exit code
@@ -51,11 +52,13 @@ it governs **both directions**:
 Read the sidecar after the pipeline returns. The exit code is a hint; the result event
 is the verdict.
 
-**Where this still applies.** anvil's execution atom no longer spawns a CLI: the
-implementing agent is a workflow subagent that returns a validated object, so there is
-no exit code to mistrust and no stream to parse. The lesson stays because it is the
-right discipline the moment you *do* shell out to a long-running process — but the
-better first question turned out to be whether you need to spawn one at all. See §11.
+**Where this went.** The Workflow-era execution atom had already stopped spawning a
+CLI — its implementing agent was a workflow subagent returning a validated object, so
+there was no exit code to mistrust and no stream to parse (see §11). That whole atom
+is gone; Forged owns the process boundary now, and its ledger, not an exit code, is
+the verdict. The lesson survives the move: the moment you *do* shell out to a
+long-running process, trust the durable record over the pipeline status — and ask
+first whether you need to spawn one at all.
 
 ## 3. A panel plus a synthesizer beats one critic — and a second model family beats a second instance
 
@@ -70,84 +73,106 @@ that buckets every finding into:
 
 That corroborated/single/conflicting split is the entire payoff, and two same-family
 critics are the floor that produces it. What moved the ceiling was not a third *opinion*
-but a third **model family**: `plan-critique-improve.js` now runs a third leg that hands
+but a third **model family**: `plan-critique-improve.js` ran a third leg that handed
 the same critique prompt to the `codex` CLI
-(`codex exec --sandbox read-only`) and relays its findings back in the same contract.
+(`codex exec --sandbox read-only`) and relayed its findings back in the same contract.
 Two instances of one model share blind spots — and share hallucinations — so their
 agreement is weaker evidence than it looks. Agreement across families cannot arrive by
 that route, which makes it the strongest signal the panel produces.
 
 This is not a hunch. The codex leg caught merge-blocking defects in four consecutive
-drover rounds, findings the same-family critics did not raise. That is why it is wired
-into the workflow as structure rather than left as tribal knowledge the operator has to
-remember to run by hand. It stays strictly optional: when `codex` is absent or the
-invocation fails, the leg reports itself unavailable — it never fabricates a third
-opinion — and the panel degrades to exactly the two-critic behavior above. Going past
-three is still diminishing returns.
+drover rounds, findings the same-family critics did not raise. That is why it was wired
+in as structure rather than left as tribal knowledge the operator had to remember to run
+by hand. It stayed strictly optional: when `codex` was absent or the invocation failed,
+the leg reported itself unavailable — it never fabricated a third opinion — and the
+panel degraded to exactly the two-critic behavior above. Going past three is still
+diminishing returns.
 
-**The same argument applies after the code is written.** The execution atom reviews
+**The same argument applied after the code was written.** The execution atom reviewed
 every draft PR twice: `anvil-reviewer` and a codex relay, findings tagged by source and
 merged, with the severer of the two verdicts winning — a reviewer that found a blocker
 is not outvoted by one that did not look in the same place. Reviewing is where
-corroboration is cheapest to act on, because the fix round is already there. The
-post-fix re-review deliberately skips codex: that verdict is informational (the atom
-stops either way), and a second full pass is real money for a number nothing branches
+corroboration is cheapest to act on, because the fix round is already there. That atom's
+post-fix re-review deliberately skipped codex: that verdict was informational (the atom
+stopped either way), and a second full pass is real money for a number nothing branches
 on.
 
-## 4. The atom stops at a draft PR
+**Where this went.** Every artifact named above is deleted, and
+`scripts/validate.sh` keeps them deleted: `plan-critique-improve.js` and
+`agents/reviewer.md` are both on its legacy-paths list. Anvil no longer owns a review
+stage at all. What survived is the finding, not the wiring — `/anvil:critique` still
+buckets corroborated/single/conflicting and still prefers a second model family over a
+second instance, but it scales topology to risk and uses the host harness's native
+delegation instead of a bundled workflow shelling a CLI. Post-lock review belongs to
+Forged, against the operator's roster. Read this section as why those contracts exist,
+not as a description of code in this repository.
 
-The execution atom is fixed: launch -> quality gate -> draft PR -> review ->
-ONE auto-fix round (a constant in the workflow, deliberately not a knob) -> stop.
-It never auto-merges.
+## 4. The old execution atom stopped at a draft PR
 
-Sessions are jobs, not shows — "Plan. Run. Review. Ship. Don't watch." The point of
-stopping at a draft is that the human adjudicates the merge. The loop does the toil
-(write, gate, open, review, fix once) and then hands a reviewable artifact to a person.
-A single auto-fix round catches the cheap review misses without letting the agent grind
-indefinitely against findings it can't resolve. More rounds invite thrash; merge
-authority stays human.
+The deleted execution atom was fixed: launch -> quality gate -> draft PR ->
+review -> ONE auto-fix round (a constant in the Workflow, deliberately not a
+knob) -> stop. It never auto-merged.
 
-**Amended for the epic path (2026-08): "never merges" means never merges to the
-DEFAULT branch.** Inside an epic, a CLEAN slice — quality gate passed, review ran, no
-BLOCKER/HIGH from either reviewer — may auto-merge into the epic's INTEGRATION branch
-(`anvil/epic-<id>`), because without that the wave loop deadlocks on a human at every
-slice and "kick it off and come back" is fiction. The integration branch is the
-autonomy boundary: wrongness lands on a branch you can delete, never on the branch
-teammates pull. The epic ends as ONE draft PR (integration → default), so the human
-adjudication the atom used to demand per slice is batched at the epic boundary — moved,
-not removed. Anything short of clean still stalls for a person, and nothing anvil runs
-ever merges to the default branch.
+The design treated sessions as jobs, not shows — "Plan. Run. Review. Ship. Don't
+watch." Stopping at a draft kept merge adjudication with the human. The loop did
+the toil (write, gate, open, review, fix once) and handed a reviewable artifact
+to a person. A single auto-fix round caught cheap review misses without letting
+the agent grind indefinitely; more rounds would have invited thrash.
 
-## 5. Structured fenced output is the extraction contract
+**The historical epic amendment (2026-08) made "never merges" mean never merges
+to the DEFAULT branch.** Inside that Workflow, a CLEAN slice — quality gate
+passed, review ran, no BLOCKER/HIGH from either reviewer — could auto-merge into
+the epic's INTEGRATION branch (`anvil/epic-<id>`), because without that the wave
+loop deadlocked on a human at every slice and "kick it off and come back" was
+fiction. The integration branch was the autonomy boundary: wrongness landed on
+a disposable branch, never on the branch teammates pulled. The epic ended as
+ONE draft PR (integration → default), so human
+adjudication was batched at the epic boundary — moved, not removed.
 
-Agents communicate results to the harness through exactly one tagged fenced block, and
-the harness extracts that block by its tag. The tags are a contract — get a character
-wrong and extraction silently returns nothing.
+**Where this went.** Forged owns this policy now. Its current integration branch
+is `forged/epic-<id>` (the old `anvil/epic-<id>` name was retired), it may merge
+only mechanically clean slices there, and it still ends at one draft PR to the
+default branch for human adjudication.
 
-The anvil tags (renamed from Forge's `forge-*`):
+## 5. Structured fenced output was the Workflow extraction contract
 
-- critic emits ` ```anvil-spec-critique `
-- the synthesizer step emits ` ```anvil-spec-recommendations `
-- the reviewer emits ` ```anvil-review `
+Workflow agents communicated results to the harness through exactly one tagged
+fenced block, which the harness extracted by tag. A one-character mismatch made
+extraction silently return nothing.
 
-Severity labels are uniform everywhere: `BLOCKER / HIGH / MEDIUM / LOW`. One block per
-agent, exact tag, closed fence. The well-formed-final-fence check in lesson 2 depends on
-this contract holding.
+The historical Anvil tags (renamed from Forge's `forge-*`) were:
 
-## 6. Dedupe GitHub review comments with hidden markers
+- critic emitted ` ```anvil-spec-critique `
+- the synthesizer step emitted ` ```anvil-spec-recommendations `
+- the reviewer emitted ` ```anvil-review `
 
-Publishing review findings to a PR is not idempotent by default — re-running the review
-posts the same comment again. Embed a hidden HTML-comment marker carrying a stable
-finding id in each published comment:
+Severity labels were uniform: `BLOCKER / HIGH / MEDIUM / LOW`. One block per
+agent, exact tag, closed fence. The well-formed-final-fence check in lesson 2
+depended on this contract holding.
+
+**Where this went.** `/anvil:critique` still uses the critique and
+recommendations fences as its human-readable planning contract. The deleted
+reviewer and execution Workflow no longer publish or parse `anvil-review`;
+Forged stores typed results and findings in its ledger.
+
+## 6. The Workflow deduped GitHub review comments with hidden markers
+
+Publishing review findings to a PR was not idempotent by default — re-running
+the review posted the same comment again. The Workflow embedded a hidden
+HTML-comment marker carrying a stable finding id in each published comment:
 
 ```
 <!-- anvil-finding id=<stable-id> -->
 ```
 
-Before posting, scan the PR's existing comments for that marker; skip or update instead
-of duplicating. The id must derive from the finding's content/location, not from
-anything that varies per run, or dedup fails. This keeps a re-reviewed PR clean across
-repeated loop passes.
+Before posting, it scanned existing comments for that marker and skipped or
+updated a match. The id derived from finding content/location rather than a run
+identifier, keeping repeated passes from duplicating comments.
+
+**Where this went.** Anvil no longer publishes execution-review comments.
+Forged owns review findings and their durable identity; GitHub publication, if
+enabled by a future adapter, must derive from that identity rather than rebuild
+state in Smithy.
 
 ## 7. Worktrees are disposable; durable state lives out-of-repo
 
@@ -156,7 +181,7 @@ dies with it, and — just as important — anything anvil commits into it pollu
 target repo. So keep all durable state operator-scoped and out-of-repo:
 
 - beads in `$BEADS_DIR` (default `~/.anvil/beads`)
-- spec bodies in `~/.anvil/specs/<id>.md`
+- spec bodies in `$ANVIL_HOME/specs/<id>.md` (default `~/.anvil/specs/<id>.md`)
 
 anvil never commits a `.beads` file into the target repo, never edits the target's
 `CLAUDE.md` or settings, and never requires each worktree to carry its own committed
@@ -216,12 +241,18 @@ The general form: an agent supervising anything longer than its own tool timeout
 a detached job, a durable status file, a poll loop, and a kill path. Any one of those
 missing and "don't watch" becomes "can't tell".
 
-Where it applies in anvil today: **not** the implementing agent, which stopped being a
-spawned process entirely (§11), but the `codex` legs in both the critique panel and the
-review stage. Those genuinely shell a long-running CLI, and they use exactly this
-pattern.
+**Where this went.** Nothing in this repository spawns, polls, or reaps a job any
+more. The implementing agent stopped being a spawned process first (§11), and the last
+two callers of this pattern — the `codex` legs in the critique panel and the review
+stage — went with the Workflow execution path. `/anvil:dispatch` now forbids the whole
+shape by name: no `&`, no `nohup`, no PID file, no lead-agent poll loop. `forged run
+submit` is the detachment primitive and the ledger is the durable status file, which is
+these three rules relocated into a service that outlives the session. Treat the section
+as the reason Forged's handoff has a durable record and a deadline — and as a live
+warning for any future code that *does* shell a long job — not as guidance for a skill
+here.
 
-## 11. Prefer a sanctioned subagent to a spawned CLI
+## 11. The Workflow preferred a sanctioned subagent to a spawned CLI
 
 The implement stage originally shelled out to `claude --print
 --dangerously-skip-permissions`, and everything painful about it followed from that one
@@ -232,24 +263,30 @@ kill), and its own result channel (a stream sidecar, a verdict grepped out of a 
 Three separate live failures on drover came out of that one decision, and each fix made
 the machinery larger.
 
-A workflow `agent()` is inside the session. It is a sanctioned subagent: it inherits the
-operator's permission mode, returns a schema-validated object, and is bounded by the
-workflow runtime. Switching the implement stage to one deleted the permission flag, the
+A Workflow `agent()` was inside the session. It was a sanctioned subagent: it
+inherited the operator's permission mode, returned a schema-validated object,
+and was bounded by the Workflow runtime. Switching the implement stage to one deleted the permission flag, the
 consent relay, the detached spawn, the poll loop, the PID file, and the log-grep verdict
 — a few hundred lines of hard-won machinery replaced by an ordinary `agent()` call. It
 also made the stage resumable for free, because `agent()` results cache by (prompt, opts)
 and a log file never could.
 
-The lesson is not "wait loops are wrong" — §10 is still correct where it applies. It is
+The lesson was not "wait loops are wrong" — §10 is still correct where it applies. It is
 that a whole class of hardening exists only to compensate for working outside the
 sanctioned boundary, and the cheapest fix is usually to step back inside it. When a
 workaround keeps growing, check whether the thing being worked around is load-bearing.
 
-The honest cost: isolation is now prompt-scoped rather than process-scoped. A subagent
-can pick up ambient project context (the target repo's `CLAUDE.md`) that a bare
-`claude --print` would not have seen, so §1 gets a little weaker — the spec is still the
-sole instruction, but it is no longer the only thing in the room. That is a real trade,
-and it is worth it.
+The honest cost was prompt-scoped rather than process-scoped isolation. A
+subagent could pick up ambient project context (the target repo's `CLAUDE.md`)
+that a bare `claude --print` would not have seen, so §1 became a little weaker —
+the spec was still the sole instruction, but no longer the only thing in the
+room. That was a real trade,
+and it was worth it inside that Workflow.
+
+**Where this went.** The Workflow and its `agent()` boundary were deleted.
+Forged now invokes cognition through provider adapters, persists typed stage
+results, and owns retries and continuation; Smithy neither spawns a provider CLI
+nor embeds a provider-specific subagent runtime.
 
 ## 12. Lock late — the rolling wave
 
@@ -276,9 +313,9 @@ it will be wrong, and it will look authoritative.
 
 ## 13. Sandbox asymmetry: the read-only legs get the harder cage
 
-The codex legs — critics and reviewer, the roles that must never write — run under an
+The codex legs — critics and reviewer, the roles that must never write — ran under an
 OS-enforced sandbox (`codex exec --sandbox read-only`, Seatbelt on macOS). The
-implementing agent — the role that must write — has no such cage: its containment is
+implementing agent — the role that must write — had no such cage: its containment was
 structural (a disposable worktree outside the repo, commits that only ever reach a
 draft PR or an integration branch, never the default branch). Mechanical enforcement
 where a guarantee is cheap, structural containment where capability is the point.
@@ -313,3 +350,10 @@ costs pennies.
 The principle: cost-tune a pipeline by tracing where defects are *created* and where
 they are *paid for*, then put capability at the origin and thrift in the plumbing —
 never the reverse.
+
+**Where this landed.** The seat-by-seat model pins above are history: they described
+Anvil's own Workflow roster, which no longer exists. The same economics now live in an
+operator-configured Forged roster — `mixed`, `all-codex`, `all-anthropic` in
+`$ANVIL_HOME/config.yaml` — chosen independently of the `lean`/`standard`/`high`
+assurance profile, and never committed to this repository. The principle survived the
+rewrite; the hard-coded pins did not.

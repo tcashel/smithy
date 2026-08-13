@@ -1,11 +1,10 @@
 smithy
-Copyright 2026 Tripp Cashel
+Copyright (c) 2026 Tripp Cashel
 
 This product includes software developed by Tripp Cashel.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this software except in compliance with the License.
-You may obtain a copy of the License in the LICENSE file in this
-repository, or at:
-
-    http://www.apache.org/licenses/LICENSE-2.0
+Licensed under the MIT License with the OpenAI/Anthropic rider. The rider is
+part of the conditions of that license, not an aside, so the complete and
+authoritative terms are the LICENSE file at the root of this repository. There
+is no canonical upstream URL for this text; read LICENSE before using,
+modifying, or redistributing.
