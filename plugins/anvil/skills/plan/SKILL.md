@@ -9,7 +9,7 @@ You convert an idea (or a plan the operator just produced in plan mode) into an 
 
 anvil is **operator-scoped and non-invasive**. Everything you produce lives OUT of the target repo:
 
-- The spec body is a file at `~/.anvil/specs/<id>.md`.
+- The spec body is a file at `${ANVIL_HOME:-$HOME/.anvil}/specs/<id>.md`.
 - The spec's place in the work-list is a beads issue in `$BEADS_DIR` (default `~/.anvil/beads`).
 - You never commit a spec into the repo, never edit the repo's `CLAUDE.md`, never touch repo settings, and never write a per-worktree file.
 
@@ -27,7 +27,7 @@ The spec you lock here is picked up downstream:
    provider roster, and submits the work to Forged. Forged implements, gates,
    reviews, remediates as the stored profile requires, and stops at a draft PR.
 
-The launched agent sees **only the spec body**. Not this conversation, not your research notes, not the repo's `CLAUDE.md`. Anything the agent needs must be inside `~/.anvil/specs/<id>.md`. A vague spec produces a confused agent. That single fact is why this skill exists.
+The launched agent sees **only the spec body**. Not this conversation, not your research notes, not the repo's `CLAUDE.md`. Anything the agent needs must be inside `${ANVIL_HOME:-$HOME/.anvil}/specs/<id>.md`. A vague spec produces a confused agent. That single fact is why this skill exists.
 
 ## When you're invoked
 
@@ -123,7 +123,7 @@ ID="$(printf '%s' "$ISSUE_JSON" | jq -r '.id')"
 # 2) Write the spec body to the operator-scoped specs dir, named by the issue id.
 #    Use the 'write' file tool (shown here as the target path) — start at '# <title>',
 #    no YAML frontmatter, no fenced wrapper.
-#    -> ~/.anvil/specs/$ID.md
+#    -> $ANVIL_HOME/specs/$ID.md
 
 # 3) Point the bd issue at the spec body so downstream skills can find it.
 "$BD_BIN" update "$ID" --description "spec: $ANVIL_HOME/specs/$ID.md" --json
@@ -139,7 +139,7 @@ Notes on the bd step:
 
 1. Create the EPIC issue first (title from the plan map's H1; description's first
    line is `kind: epic`, plus an `anvil-epic` label if bd supports labels). Write
-   the plan map to `~/.anvil/specs/<epic-id>.md`.
+   the plan map to `$ANVIL_HOME/specs/<epic-id>.md`.
 2. Create each child issue; write wave-1 children FULL specs (normal schema) and
    downstream children STUBS with `- [ ] ASSUMES:` ledgers (per `epic.md`).
 3. Wire the graph: each downstream child **blocked by** the upstream slices it
@@ -154,7 +154,7 @@ Notes on the bd step:
 After locking, surface to the operator:
 
 - the **issue id** (and for an epic: child ids grouped by wave),
-- the **spec path** (`~/.anvil/specs/<id>.md`),
+- the **spec path** (`$ANVIL_HOME/specs/<id>.md`),
 - whether it is **ready** or **blocked on open questions** (and which ones; for
   an epic, stubs blocked on ASSUMES are the expected steady state, not a problem).
 
@@ -169,7 +169,7 @@ draft here.
 
 - **Starting Forged before approval.** Planning uses `bd`/`br` plus file tools;
   the dispatch skills own the later typed handoff.
-- **Writing anything into the target repo.** No `.beads/` file committed, no `CLAUDE.md` edits, no repo settings, no per-worktree file. All state lives under `~/.anvil/`.
+- **Writing anything into the target repo.** No `.beads/` file committed, no `CLAUDE.md` edits, no repo settings, no per-worktree file. All state lives under `$ANVIL_HOME` (default `~/.anvil`).
 - **Adding YAML frontmatter or a fenced wrapper.** The spec file starts at `# <title>` and is the spec body verbatim.
 - **Locking a spec ready with open `- [ ]` questions.** This violates the lock gate. Resolve them or file the issue blocked.
 - **Citing a file you didn't open.** If the spec mentions `src/foo.ts:42`, `read` it first.

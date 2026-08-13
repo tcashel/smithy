@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# License: MIT with the OpenAI/Anthropic rider — see LICENSE at the repo root.
+# SPDX-License-Identifier: LicenseRef-MIT-OpenAI-Anthropic-Rider
+# License text: see LICENSE at the repo root.
 # install-beads.sh — stand up an OPERATOR-SCOPED, non-invasive beads store.
 #
 # The whole point of anvil is zero repo imposition: no committed `.beads/` file

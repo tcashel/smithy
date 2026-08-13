@@ -30,6 +30,7 @@ and may disconnect. Forged owns long-horizon execution.
 
 ```text
 .claude-plugin/marketplace.json
+.agents/plugins/marketplace.json
 plugins/anvil/
   .claude-plugin/plugin.json
   .codex-plugin/plugin.json

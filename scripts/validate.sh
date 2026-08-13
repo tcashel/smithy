@@ -93,11 +93,12 @@ done
 check_handoff_block() {
   awk -v start="$2" -v submit="$3" '
     function invokes(line, verb,   tail) {
+      sub(/^[[:space:]]+/, "", line)
       if (index(line, verb) != 1) { return 0 }
       tail = substr(line, length(verb) + 1, 1)
       return (tail == "" || tail == " ")
     }
-    /^```/                       { fenced = !fenced; froze = 0; next }
+    /^[[:space:]]*```/           { fenced = !fenced; froze = 0; next }
     !fenced                      { next }
     invokes($0, start)           { froze = 1; next }
     froze && invokes($0, submit) { ok = 1 }
@@ -107,12 +108,28 @@ check_handoff_block() {
 
 dispatch_skill=plugins/anvil/skills/dispatch/SKILL.md
 epic_skill=plugins/anvil/skills/run-epic/SKILL.md
-check "dispatch hands off: forged run start then submit" \
+check "dispatch hands off in one fenced block: forged run start then submit" \
   check_handoff_block "$dispatch_skill" "forged run start" "forged run submit"
-check "run-epic hands off: forged epic start then submit" \
+check "run-epic hands off in one fenced block: forged epic start then submit" \
   check_handoff_block "$epic_skill" "forged epic start" "forged epic submit"
 
-# 7. Both plugin manifests ship the same advertised version. Installed plugins
+# 7. Planning must honor a non-default ANVIL_HOME for both the spec write and
+#    the Beads pointer. A literal default-home spec path can split those targets.
+check_custom_anvil_home_contract() {
+  local plan=plugins/anvil/skills/plan/SKILL.md
+  local epic=plugins/anvil/skills/plan/epic.md
+
+  ! grep -Fq '~/.anvil/specs/' "$plan" &&
+    ! grep -Fq '~/.anvil/specs/' "$epic" &&
+    grep -Fq -- '-> $ANVIL_HOME/specs/$ID.md' "$plan" &&
+    grep -Fq -- 'spec: $ANVIL_HOME/specs/$ID.md' "$plan" &&
+    grep -Fq '${ANVIL_HOME:-$HOME/.anvil}/specs/<epic-id>.md' "$epic" &&
+    grep -Fq '${ANVIL_HOME:-$HOME/.anvil}/specs/<child-id>.md' "$epic"
+}
+
+check "plan honors a non-default ANVIL_HOME" check_custom_anvil_home_contract
+
+# 8. Both plugin manifests ship the same advertised version. Installed plugins
 #    are version-keyed, so a half-bumped pair serves stale content forever.
 #    Bumping Anvil means editing this constant alongside both plugin.json files.
 expected_version=0.3.0
