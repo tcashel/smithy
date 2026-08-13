@@ -51,11 +51,13 @@ it governs **both directions**:
 Read the sidecar after the pipeline returns. The exit code is a hint; the result event
 is the verdict.
 
-**Where this still applies.** anvil's execution atom no longer spawns a CLI: the
-implementing agent is a workflow subagent that returns a validated object, so there is
-no exit code to mistrust and no stream to parse. The lesson stays because it is the
-right discipline the moment you *do* shell out to a long-running process — but the
-better first question turned out to be whether you need to spawn one at all. See §11.
+**Where this went.** The Workflow-era execution atom had already stopped spawning a
+CLI — its implementing agent was a workflow subagent returning a validated object, so
+there was no exit code to mistrust and no stream to parse (see §11). That whole atom
+is gone; Forged owns the process boundary now, and its ledger, not an exit code, is
+the verdict. The lesson survives the move: the moment you *do* shell out to a
+long-running process, trust the durable record over the pipeline status — and ask
+first whether you need to spawn one at all.
 
 ## 3. A panel plus a synthesizer beats one critic — and a second model family beats a second instance
 
@@ -313,3 +315,10 @@ costs pennies.
 The principle: cost-tune a pipeline by tracing where defects are *created* and where
 they are *paid for*, then put capability at the origin and thrift in the plumbing —
 never the reverse.
+
+**Where this landed.** The seat-by-seat model pins above are history: they described
+Anvil's own Workflow roster, which no longer exists. The same economics now live in an
+operator-configured Forged roster — `mixed`, `all-codex`, `all-anthropic` in
+`$ANVIL_HOME/config.yaml` — chosen independently of the `lean`/`standard`/`high`
+assurance profile, and never committed to this repository. The principle survived the
+rewrite; the hard-coded pins did not.

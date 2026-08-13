@@ -66,6 +66,10 @@ is unavailable.
 - Dispatch never hard-codes provider or model names. Profiles and ordered
   rosters live in `$ANVIL_HOME/config.yaml`, validate with
   `forged definition validate`, and are frozen into each run.
+- Assurance profile and roster are independent choices. `lean`/`standard`/
+  `high` set topology; `mixed`, `all-codex`, and `all-anthropic` are the
+  practical operator rosters. Documentation may name them; no skill, manifest,
+  or script in this repo may carry their YAML.
 - A future roster edit affects future runs. A live run changes roster only via
   `forged run revise-roster` at a durable boundary.
 - Herdr is visibility/transport, not run truth. A process fallback must remain

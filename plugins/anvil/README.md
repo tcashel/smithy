@@ -57,12 +57,21 @@ lead session does not stay alive to preserve the job.
 
 ## Profiles and rosters
 
-`$ANVIL_HOME/config.yaml` separates cognitive topology from provider choice:
+`$ANVIL_HOME/config.yaml` separates cognitive topology from provider choice.
+The two are picked independently: any profile can run under any roster.
 
 - `lean`, `standard`, and `high` profiles define proportional seats and
   escalation edges.
 - Named rosters map semantic roles to ordered provider/model candidates.
+  `mixed` is the practical default — it splits seats across families so review
+  does not share the implementer's blind spots. `all-codex` and
+  `all-anthropic` keep every seat in one family, for a provider outage or a
+  deliberate single-family comparison.
 - `host_policy` chooses preferred/required/off Herdr behavior.
+
+Those roster names are operator configuration, not plugin source. The YAML that
+defines them lives only under `$ANVIL_HOME`; this repository ships no rosters,
+credentials, or machine-specific paths.
 
 Forged validates and hashes the selected package at run start. Editing YAML
 later changes future runs only. An in-flight run switches roster explicitly at
