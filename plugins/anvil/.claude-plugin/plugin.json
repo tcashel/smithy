@@ -1,7 +1,7 @@
 {
   "name": "anvil",
   "description": "Operator-scoped planning and adjudication for Forged. Shape and lock work with one lead agent, then submit provider-neutral durable slice or epic execution and reconnect through the ledger, Herdr, or MCP App.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "SEE LICENSE IN LICENSE",
   "author": {
     "name": "Tripp Cashel"

@@ -1,6 +1,6 @@
 {
   "name": "anvil",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Operator-scoped planning and adjudication for Forged. Shape and lock work with one lead agent, then submit provider-neutral durable slice or epic execution and reconnect through the ledger, Herdr, or MCP App.",
   "author": {
     "name": "Tripp Cashel"
@@ -11,6 +11,14 @@
   "interface": {
     "displayName": "anvil",
     "shortDescription": "Plan and adjudicate, then hand execution to Forged",
-    "category": "Development"
+    "longDescription": "Plan, critique, and adjudicate work with one lead agent, then hand approved slice or epic execution to Forged for durable provider-neutral delivery.",
+    "developerName": "Tripp Cashel",
+    "category": "Development",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Plan this work with Anvil before handing it to Forged.",
+      "Critique and adjudicate this Anvil spec.",
+      "Dispatch the next ready Anvil issue through Forged."
+    ]
   }
 }
