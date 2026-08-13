@@ -57,4 +57,6 @@ See [the plugin guide](plugins/anvil/README.md) and
 
 ## License
 
-[Apache 2.0](LICENSE) © 2026 Tripp Cashel — see [NOTICE](NOTICE).
+[MIT License with the OpenAI/Anthropic rider](LICENSE) © 2026 Tripp Cashel —
+see [NOTICE](NOTICE). The rider is a condition of the license, so read
+`LICENSE` before redistributing.
