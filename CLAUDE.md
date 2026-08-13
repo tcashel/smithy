@@ -78,12 +78,18 @@ claude plugin validate .
 bash scripts/validate.sh
 ```
 
-CI runs `scripts/validate.sh`: JSON manifests, frontmatter, bootstrap syntax,
-and a regression check that the removed Workflow/watch execution files do not
-return. `claude plugin validate .` is local-only because CI has no Claude CLI.
+CI runs `scripts/validate.sh`: JSON manifests (both marketplaces, both plugin
+manifests), frontmatter, bootstrap syntax, a regression check that the removed
+Workflow/watch execution files do not return, and the positive handoff contract
+— dispatch must still invoke `forged run start`/`submit`, run-epic must still
+invoke `forged epic start`/`submit`, and both plugin manifests must advertise
+the same version. `claude plugin validate .` is local-only because CI has no
+Claude CLI.
 
 **Bump both plugin manifests on every behavior change.** Installed plugins are
-version-keyed and otherwise continue serving stale content.
+version-keyed and otherwise continue serving stale content. The bump is three
+edits, not two: both `plugin.json` files and `expected_version` in
+`scripts/validate.sh`, which is what keeps the pair from drifting apart.
 
 ## Historical evidence
 

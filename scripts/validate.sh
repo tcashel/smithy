@@ -33,7 +33,8 @@ check_frontmatter() {
 }
 
 # 1. JSON manifests
-check "marketplace.json" check_json .claude-plugin/marketplace.json
+check "Claude marketplace.json" check_json .claude-plugin/marketplace.json
+check "Codex marketplace.json" check_json .agents/plugins/marketplace.json
 check "Claude plugin.json" check_json plugins/anvil/.claude-plugin/plugin.json
 check "Codex plugin.json" check_json plugins/anvil/.codex-plugin/plugin.json
 
@@ -79,6 +80,37 @@ for f in "${legacy_paths[@]}"; do
     echo "PASS: legacy path absent: $f"
   fi
 done
+
+# 6. The positive handoff contract. Absence checks alone would still pass on a
+#    skill that quietly stopped calling Forged, so assert the CLI verbs too.
+check_contains() {
+  grep -qF -- "$2" "$1"
+}
+
+dispatch_skill=plugins/anvil/skills/dispatch/SKILL.md
+epic_skill=plugins/anvil/skills/run-epic/SKILL.md
+for verb in "forged run start" "forged run submit"; do
+  check "dispatch invokes: $verb" check_contains "$dispatch_skill" "$verb"
+done
+for verb in "forged epic start" "forged epic submit"; do
+  check "run-epic invokes: $verb" check_contains "$epic_skill" "$verb"
+done
+
+# 7. Both plugin manifests ship the same advertised version. Installed plugins
+#    are version-keyed, so a half-bumped pair serves stale content forever.
+#    Bumping Anvil means editing this constant alongside both plugin.json files.
+expected_version=0.3.0
+
+check_version() {
+  local actual
+  actual=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version))" "$1") || return 1
+  [[ $actual == "$2" ]]
+}
+
+check "Claude plugin.json version == $expected_version" \
+  check_version plugins/anvil/.claude-plugin/plugin.json "$expected_version"
+check "Codex plugin.json version == $expected_version" \
+  check_version plugins/anvil/.codex-plugin/plugin.json "$expected_version"
 
 if [[ $failures -gt 0 ]]; then
   exit 1
