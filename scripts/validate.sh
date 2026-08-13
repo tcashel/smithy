@@ -22,6 +22,19 @@ check_json() {
   node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$1"
 }
 
+check_codex_interface() {
+  node -e '
+    const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const ui = manifest.interface || {};
+    const strings = ["displayName", "shortDescription", "longDescription", "developerName", "category"];
+    if (!strings.every((key) => typeof ui[key] === "string" && ui[key].trim())) process.exit(1);
+    if (!Array.isArray(ui.capabilities) || !ui.capabilities.length ||
+        !ui.capabilities.every((value) => typeof value === "string" && value.trim())) process.exit(1);
+    if (!Array.isArray(ui.defaultPrompt) || !ui.defaultPrompt.length || ui.defaultPrompt.length > 3 ||
+        !ui.defaultPrompt.every((value) => typeof value === "string" && value.trim() && value.length <= 128)) process.exit(1);
+  ' "$1"
+}
+
 check_frontmatter() {
   awk '
     NR==1 { if ($0 != "---") { exit 1 } next }
@@ -37,6 +50,8 @@ check "Claude marketplace.json" check_json .claude-plugin/marketplace.json
 check "Codex marketplace.json" check_json .agents/plugins/marketplace.json
 check "Claude plugin.json" check_json plugins/anvil/.claude-plugin/plugin.json
 check "Codex plugin.json" check_json plugins/anvil/.codex-plugin/plugin.json
+check "Codex plugin interface contract" \
+  check_codex_interface plugins/anvil/.codex-plugin/plugin.json
 
 # 2. Skill frontmatter
 skill_files=(plugins/anvil/skills/*/SKILL.md)
@@ -132,7 +147,7 @@ check "plan honors a non-default ANVIL_HOME" check_custom_anvil_home_contract
 # 8. Both plugin manifests ship the same advertised version. Installed plugins
 #    are version-keyed, so a half-bumped pair serves stale content forever.
 #    Bumping Anvil means editing this constant alongside both plugin.json files.
-expected_version=0.3.0
+expected_version=0.3.1
 
 check_version() {
   local actual
